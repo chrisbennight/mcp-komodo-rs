@@ -1,8 +1,12 @@
-# komodo-mcp-rs
+# mcp-komodo-rs
 
-`komodo-mcp-rs` is a private Rust Model Context Protocol server for bounded
+`mcp-komodo-rs` is a Rust Model Context Protocol server for bounded
 Komodo operations. It is designed for the homelab MCP tool-search gateway and
 is not a general Komodo API proxy.
+
+The repository is named `mcp-komodo-rs`; the executable remains
+`komodo-mcp-rs` for compatibility. The current runtime requires the gateway
+integration described below. A standalone client setup is not yet provided.
 
 The current surface exposes operational status plus a small set of typed
 deploy, restart, stop, build, cancel, and pull intents. Sensitive operations are not
@@ -147,5 +151,6 @@ cargo run --locked -p komodo-server -- --emit-gateway-manifest
 
 The implementation contract targets Komodo 2.1.2. Compatibility references
 are recorded in [the compatibility document](docs/compatibility.md). Deployment
-configuration and Infisical references live in `docker-home`, not this
-repository.
+configuration and secret-provider references belong in the operator's deployment
+repository, not this source repository. See [builds and releases](docs/releases.md)
+for GitHub checks, image publication, and the remaining release prerequisites.

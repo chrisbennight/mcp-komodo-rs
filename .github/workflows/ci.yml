@@ -1,15 +1,23 @@
-name: test
+name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # renovate: datasource=github-tags depName=rust-lang/rustup
       RUSTUP_INIT_VERSION: "1.29.0"
@@ -37,45 +45,58 @@ jobs:
           rustup toolchain install "${RUST_TOOLCHAIN_VERSION}" --profile minimal --component rustfmt,clippy
           rustup default "${RUST_TOOLCHAIN_VERSION}"
 
-      # These cargo invocations run on the runner, not in an image, so they see
-      # the job environment directly - but cargo reads no environment variable
-      # for a mirror, so the address still has to become a config file. Written
-      # here rather than committed: a checked-in mirror would be a hard
-      # dependency on a host that resolves only on the LAN.
-      - name: Point cargo at the crate proxy
-        run: |
-          set -euo pipefail
-          if [ -z "${CRATES_INDEX_URL:-}" ]; then
-            echo "SKIP: no crate index configured; cargo will use crates.io"
-            exit 0
-          fi
-          mkdir -p .cargo
-          printf '\n[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n' \
-            "${CRATES_INDEX_URL}" >> .cargo/config.toml
-          echo "cargo source replacement written"
-
       - name: Verify formatting
         run: cargo fmt --all -- --check
-
       - name: Lint all targets
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
       - name: Test all features
         run: cargo test --workspace --all-features --locked
-
       - name: Build documentation
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
-
       - name: Validate documentation links
         run: python3 scripts/check_docs.py
-
-      - name: Test documentation validator
+      - name: Test repository tooling
         run: python3 -m unittest discover -s scripts/tests
-
       - name: Verify generated gateway manifest
         run: |
           cargo run --locked -p komodo-server -- --emit-gateway-manifest > /tmp/komodo.yaml
           grep -q '^name: komodo$' /tmp/komodo.yaml
           grep -q '^  - name: stacks.deploy$' /tmp/komodo.yaml
+
+  image:
+    if: github.event_name != 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and smoke the source image
+        run: bash scripts/test_image.sh
+
+  publish:
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'chrisbennight/mcp-komodo-rs' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate publication context
+        run: python3 scripts/publish_image.py --check
+      - name: Build and smoke the source image
+        run: bash scripts/test_image.sh
+      - name: Publish the tested image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/publish_image.py
