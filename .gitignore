@@ -1,0 +1,9 @@
+/target
+/mutants.out*
+__pycache__/
+*.pyc
+/.env
+/.idea
+/.vscode
+*.pem
+*.key

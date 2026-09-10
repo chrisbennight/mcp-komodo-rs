@@ -1,0 +1,140 @@
+# Tool surface
+
+## Read contract
+
+Ordinary status tools expose only resource ids, names, normalized state,
+derived health, counts, versions, timestamps, and update availability. A
+separately named sensitive read may expose bounded configuration or diagnostic
+content when its schema, annotations, gateway policy, and result handling make
+that disclosure explicit.
+
+Search inputs accept an optional 128-byte case-insensitive substring, a bounded
+offset, and a limit from 1 through 50. Results are sorted by normalized name and
+id before slicing. Status selectors accept an exact name or id and fail on
+ambiguity.
+
+`operations.search` returns a bounded page of Komodo's update list, while
+`operations.status` resolves one operation by its stable id through Komodo
+`GetUpdate` (its former `page` argument is accepted but ignored for one
+release). Both return id, operation kind, start timestamp, success, and status.
+`stacks.diagnostics` is a sensitive read that adds Docker status text, missing
+Compose file paths, per-service image and update signals, and deploy-vs-latest
+drift. Ordinary status responses continue to omit logs, commands, stdout,
+stderr, operator/user identity, commit data, and previous/current TOML snapshots.
+
+Governed sensitive reads expose bounded configuration and content through
+their own named tools rather than a raw proxy. `stacks.config.read` returns the
+configuration shape — file mode, run directory, file paths, env-file path,
+webhook flags, and presence flags — without raw Compose, environment, commands,
+or the webhook secret. `stacks.compose.read` returns Compose files for a
+configured, latest, or deployed source. `stacks.environment.read` and
+`stacks.commands.read` return the raw environment and pre/post-deploy commands.
+`stacks.webhook.status` reports whether the webhook is enabled, whether it forces
+deploy, and whether its secret is custom or inherited. `stacks.webhook.secret.read`
+returns a custom secret value; a stack that inherits Komodo Core's shared secret
+instead reports `source: "inherited"` with `valueAvailable: false` and no value,
+and the shared secret is never fetched. `stacks.logs.tail` tails container logs
+(1-5000 lines, up to 50 named services) and `operations.logs.read` returns an
+operation's per-stage command logs. Per-file and per-record lists are bounded,
+and every content-bearing read labels its result `sensitive` and `untrusted`.
+
+## Mutation contract
+
+Mutation tools accept one exact resource selector and an operation-specific
+typed intent. They do not accept arbitrary JSON, endpoint names, wildcard
+actions, or generic resource objects. The result is a minimal receipt suitable
+for later reconciliation and never echoes sensitive input.
+
+Annotations are assigned from each operation's behavior instead of treating
+every mutation as destructive and non-idempotent. The gateway catalog owns
+risk and authorization; every mutation continues to require `komodo-admin`.
+Sensitive and consequential writes additionally require interactive,
+argument-bound approval.
+
+Mutation calls are never retried automatically. A transport failure does not
+prove that Komodo rejected the request.
+
+`stacks.stop` stops all services of an existing stack selected by exact name or
+id, preserving its containers. It uses Komodo's default termination timeout
+and returns an operation receipt. It requires `komodo-admin` and requests
+interactive review because stopping services interrupts availability. Repeated
+stops have an idempotent stopping effect, but calls are never retried; reconcile
+an ambiguous outcome through `operations.search` and `operations.status` before
+deciding whether to submit another operation.
+
+Configuration writes use Komodo's typed partial-update semantics directly.
+`stacks.config.patch` sets structural fields (file mode, run directory, file
+paths, env-file path); `stacks.compose.write`, `stacks.environment.write`, and
+`stacks.commands.write` replace inline Compose, environment, and pre/post-deploy
+commands through partial `UpdateStack`; `stacks.webhook.update` sets the webhook
+enabled and force-deploy flags and `stacks.webhook.secret.write` sets the custom
+webhook secret through the same partial update; and `stacks.file.write` writes
+one file through `WriteStackFileContents`. They never perform a full-resource
+read-modify-write cycle, send only the fields they set, validate their complete
+bounded input before the upstream call, and return the target, applied field
+names, and any reconciliation id — never the submitted contents or secret.
+Content, command, and secret writes (including the webhook secret) are
+`critical` in the gateway catalog, while structural and webhook-flag patches are
+`high`; each write's input sensitivity is declared through action-metadata, and
+only `stacks.file.write` labels its result sensitive because it echoes a path. Same-field concurrent updates are last-writer-wins when Komodo
+offers no revision precondition. Komodo may retain submitted configuration,
+content, commands, or secret values in its own traces or operation history;
+affected tool descriptions and approval prompts must disclose that upstream
+behavior.
+
+## Metadata ownership
+
+Standard MCP annotations and the experimental
+`io.modelcontextprotocol/action-metadata` namespace describe behavior and input
+sensitivity. The pinned Rust MCP type cannot retain extension members inside
+`ToolAnnotations`, so Komodo publishes that namespace through `Tool._meta`; the
+gateway normalizes it to the same reviewed contract.
+
+Current read tools are read-only, non-destructive, idempotent, closed-world,
+benign, and do not request review. Mutation metadata is operation-specific:
+
+| Operations | Destructive | Idempotent | Open world | Requests review |
+|---|---:|---:|---:|---:|
+| stack/deployment deploy, repository pull | yes | no | yes | yes |
+| stack/deployment restart | no | no | no | no |
+| stack stop | yes | yes | no | yes |
+| build run | no | no | yes | no |
+| build cancel | yes | yes | no | yes |
+| stack config/content/file/webhook writes | yes | no | no | yes |
+
+All mutations have a consequential outcome. These are behavior claims, not
+gateway permissions; catalog-owned policy remains authoritative. Writes that
+accept paths, content, or the webhook secret declare sensitive input through
+`action-metadata`, so the gateway classifies their arguments accordingly;
+`stacks.webhook.update` toggles only flags and declares operational input.
+
+Result-level `io.modelcontextprotocol/trust-annotations` label sensitive and
+untrusted output. Most normalized results claim `sensitive: false` and
+`untrusted: true`: they exclude sensitive fields but still contain
+upstream-generated strings. A read that surfaces operator-sensitive signals
+claims `sensitive: true` instead — `stacks.diagnostics` does, because it returns
+missing-file paths and Docker status text — and its catalog entry carries the
+matching `pii` classification and `returnMetadata.sensitivity: "sensitive"`
+action metadata. The governed configuration, Compose, environment, command, log,
+and webhook-secret reads set the same labels rather than inheriting the default.
+The gateway treats annotations as claims, incorporates them into tool
+identity and drift checks, and applies catalog-owned risk, release, and
+authorization policy.
+
+The Komodo `side_effects` and `pii` classification is no longer projected into
+the gateway manifest. The sidecar's registry drives the MCP annotations —
+behavior hints replace `side_effects`, and result-level sensitivity and trust
+labels replace `pii` — and `--emit-gateway-manifest` now renders an
+annotation-native scaffold (`classification_mode: mcp_annotations`, gateway-owned
+`risk` only, no per-tool `side_effects`/`pii`) that an operator completes with
+the per-tool behavior hash the gateway observes from the live server. Risk
+remains gateway-owned rather than moving into MCP annotations.
+
+## Hard exclusions
+
+There are no tools for Docker or Swarm inspection, container or server
+terminals, unrestricted shell execution, arbitrary actions or procedures,
+providers, credential stores, permissions, onboarding keys, ResourceSync
+apply, raw API forwarding, or generic resource create/update/delete. Sensitive
+configuration and logs are governed capabilities, not members of this
+exclusion list.

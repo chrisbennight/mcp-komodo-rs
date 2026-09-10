@@ -1,0 +1,8 @@
+blocked_paths: []
+notes:
+  - "This server must remain a bounded typed operational interface. Raw Komodo API forwarding, arbitrary JSON or actions, Docker inspection, Periphery configuration, terminal/shell access, and unbounded responses are outside the contract. Configuration, Compose, environment, logs, commands, and secrets require separately named typed tools with accurate MCP annotations and gateway policy."
+  - "Read and administrative Komodo identities are distinct. A handler must not dynamically choose credentials from caller input."
+  - "Mutations validate before the upstream call and are never retried after an ambiguous transport result."
+  - "The tool registry is the source of tools/list, MCP annotations, and compatibility manifest data. The gateway catalog owns risk and authorization; every mutation requires komodo-admin, while consequential sensitive writes also require argument-bound approval."
+  - "Sensitive values may cross an explicitly authorized MCP tool boundary but must not appear in source, workflow YAML, Compose examples, MCP/gateway logs, errors, metrics, approvals, audit payloads, tests, comments, or command arguments. Tests use explicit non-production sentinels. Tools that send values to Komodo must disclose that Komodo may retain them upstream."
+  - "Dockerfile and workflow changes are supply-chain sensitive. Preserve digest pins, locked builds, non-root runtime, and Infisical-only publication credentials."
