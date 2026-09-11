@@ -73,7 +73,7 @@ never line-number anchors.
 
 ## Pull requests and AERB
 
-GitHub pull requests require the `test` and `image` CI jobs and `pr-review/gate`
+GitHub pull requests require the `dependencies`, `test`, and `image` CI jobs and `pr-review/gate`
 on the current head. The AERB GitHub App must cover this repository and publish
 its status; policy is in `.github/pr-review`. A missing AERB status is an
 enrollment failure, not a reason to waive review. Configure branch protection
