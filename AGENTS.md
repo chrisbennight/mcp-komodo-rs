@@ -73,10 +73,12 @@ never line-number anchors.
 
 ## Pull requests and AERB
 
-The repository keeps `AERB` and `renovate` as Write collaborators and an active
-pull-request webhook to AERB. A merge requires `test / test (pull_request)` and
-`pr-review/gate` on the current head. A missing AERB status is an enrollment
-failure, not a reason to waive review.
+GitHub pull requests require the `test` and `image` CI jobs and `pr-review/gate`
+on the current head. The AERB GitHub App must cover this repository and publish
+its status; policy is in `.github/pr-review`. A missing AERB status is an
+enrollment failure, not a reason to waive review. Configure branch protection
+with the check names GitHub actually reports; do not assume importing files
+also configures repository settings.
 
 Fill the tailored pull-request template accurately. Authentication, bearer,
 identity JWT, credentials, tool classification, and authorization changes must

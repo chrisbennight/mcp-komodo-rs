@@ -13,7 +13,8 @@ Security-sensitive surfaces include:
   annotations;
 - `crates/komodo-server/src/auth.rs`, which authenticates the gateway and
   caller identity;
-- `Dockerfile` and `.gitea/workflows`, which form the supply-chain boundary;
+- `Dockerfile`, `.github/workflows`, and the image validation/publication
+  scripts, which form the supply-chain boundary;
   and
 - generated gateway classifications, which must remain exact with
   `tools/list`.

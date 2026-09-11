@@ -1,5 +1,5 @@
 enabled: true
-repo: bennight/komodo-mcp-rs
+repo: chrisbennight/mcp-komodo-rs
 base_branches:
   - main
 renovate_mode: eval
@@ -36,16 +36,20 @@ sensitive_paths:
   - crates/komodo-server/src/auth.rs
   - crates/komodo-server/src/config.rs
   - Dockerfile
-  - .gitea/workflows/**
-  - .gitea/pr-review/**
+  - .github/workflows/**
+  - .github/pr-review/**
+  - scripts/test_image.sh
+  - scripts/publish_image.py
 impact_map:
   crates/komodo-api/**: "Komodo credential, request, response-bound, retry, and sensitive-field normalization boundary"
   crates/komodo-mcp/**: "Model-visible schemas, tool dispatch, annotations, and gateway classification registry"
   crates/komodo-server/src/auth.rs: "Private bearer and gateway identity JWT verification boundary"
   crates/komodo-server/src/config.rs: "Environment-injected secret and bounded runtime configuration boundary"
   Dockerfile: "Published non-root service image and build supply chain"
-  .gitea/workflows/**: "CI, registry publication, and Infisical bootstrap boundary"
-  .gitea/pr-review/**: "AERB review and security policy"
+  .github/workflows/**: "CI and GHCR publication boundary"
+  .github/pr-review/**: "AERB review and security policy"
+  scripts/test_image.sh: "Isolated source-image validation"
+  scripts/publish_image.py: "Validated GHCR publication and workflow credential handling"
 research:
   enabled: true
   max_collect_steps: 15

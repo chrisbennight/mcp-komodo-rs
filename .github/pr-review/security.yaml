@@ -5,4 +5,4 @@ notes:
   - "Mutations validate before the upstream call and are never retried after an ambiguous transport result."
   - "The tool registry is the source of tools/list, MCP annotations, and compatibility manifest data. The gateway catalog owns risk and authorization; every mutation requires komodo-admin, while consequential sensitive writes also require argument-bound approval."
   - "Sensitive values may cross an explicitly authorized MCP tool boundary but must not appear in source, workflow YAML, Compose examples, MCP/gateway logs, errors, metrics, approvals, audit payloads, tests, comments, or command arguments. Tests use explicit non-production sentinels. Tools that send values to Komodo must disclose that Komodo may retain them upstream."
-  - "Dockerfile and workflow changes are supply-chain sensitive. Preserve digest pins, locked builds, non-root runtime, and Infisical-only publication credentials."
+  - "Dockerfile and workflow changes are supply-chain sensitive. Preserve digest pins, locked builds, non-root runtime, and job-scoped publication credentials. Pull requests cannot publish images."
