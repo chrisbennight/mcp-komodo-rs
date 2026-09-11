@@ -55,7 +55,8 @@ class NoticeTests(unittest.TestCase):
         _, files = package_notices.collect(self.metadata, self.root)
         self.assertEqual(files["example-1.0.0/upstream/approved.txt"], b"reviewed upstream license")
         self.metadata["packages"][0]["version"] = "1.0.1"
-        with self.assertRaisesRegex(ValueError, "no packaged notices"):
+        (self.package / "LICENSE").write_text("the new version supplies its own notice")
+        with self.assertRaisesRegex(ValueError, "stale notice override"):
             package_notices.collect(self.metadata, self.root)
 
     def test_path_escape_and_symlink_notice_are_rejected(self) -> None:

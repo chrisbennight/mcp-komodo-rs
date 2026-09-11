@@ -36,6 +36,9 @@ def collect(metadata: dict, root: Path) -> tuple[dict, dict[str, bytes]]:
     overrides = {(item["name"], item["version"]): item for item in overrides}
     resolved = {node["id"] for node in metadata["resolve"]["nodes"]}
     packages = [p for p in metadata["packages"] if p["id"] in resolved and p["source"]]
+    versions = {(p["name"], p["version"]) for p in packages}
+    if set(overrides) - versions:
+        raise ValueError("stale notice override; review overrides against resolved dependency versions")
     entries = []
     files = {}
     total = 0
