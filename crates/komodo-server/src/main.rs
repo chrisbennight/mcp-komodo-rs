@@ -16,9 +16,14 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Security-bounded Komodo MCP server")]
+#[group(multiple = false)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Clap models mutually exclusive command-line flags as booleans"
+)]
 struct Args {
     /// Serve only ordinary status tools over local stdin/stdout, without gateway or admin credentials.
-    #[arg(long, conflicts_with_all = ["healthcheck", "emit_gateway_manifest"])]
+    #[arg(long, conflicts_with_all = ["healthcheck", "emit_gateway_manifest", "emit_tools_json"])]
     stdio: bool,
     /// Check only the local liveness endpoint and exit.
     #[arg(long)]
@@ -26,6 +31,9 @@ struct Args {
     /// Print the gateway manifest generated from the tool registry and exit.
     #[arg(long)]
     emit_gateway_manifest: bool,
+    /// Print the full standard MCP tools/list catalog without runtime credentials.
+    #[arg(long, conflicts_with_all = ["healthcheck", "emit_gateway_manifest"])]
+    emit_tools_json: bool,
 }
 
 fn main() -> Result<()> {
@@ -39,6 +47,11 @@ fn main() -> Result<()> {
 
 async fn run() -> Result<()> {
     let args = Args::parse();
+    if args.emit_tools_json {
+        serde_json::to_writer(std::io::stdout().lock(), &KomodoMcp::list_tools_payload())
+            .context("write tool catalog")?;
+        return Ok(());
+    }
     if args.emit_gateway_manifest {
         print!("{}", gateway_manifest());
         return Ok(());
