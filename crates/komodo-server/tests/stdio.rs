@@ -126,3 +126,34 @@ async fn invalid_initialize_never_echoes_peer_data_in_errors() {
     assert!(stderr.contains("MCP initialization failed"));
     assert!(!stderr.contains("private-sentinel"));
 }
+
+#[tokio::test]
+async fn idle_open_stdin_does_not_prevent_exit_after_initialization_timeout() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_komodo-mcp-rs"))
+        .arg("--stdio")
+        .env_clear()
+        .env("KOMODO_MCP_READ_API_KEY", "synthetic-key")
+        .env("KOMODO_MCP_READ_API_SECRET", "synthetic-secret")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let input = child.stdin.take().unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(35), child.wait())
+        .await
+        .expect("the process must exit even while its stdin remains open")
+        .unwrap();
+    assert!(!status.success());
+    drop(input);
+    let mut diagnostics = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut diagnostics)
+        .await
+        .unwrap();
+    assert!(diagnostics.contains("MCP initialization timed out"));
+}

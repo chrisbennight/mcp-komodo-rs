@@ -28,8 +28,16 @@ struct Args {
     emit_gateway_manifest: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new().context("create async runtime")?;
+    let result = runtime.block_on(run());
+    // Tokio stdin uses a blocking read that cannot be cancelled. Once the
+    // service has ended, that read must not keep this executable alive.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    result
+}
+
+async fn run() -> Result<()> {
     let args = Args::parse();
     if args.emit_gateway_manifest {
         print!("{}", gateway_manifest());

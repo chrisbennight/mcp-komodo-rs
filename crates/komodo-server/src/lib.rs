@@ -1,4 +1,4 @@
-//! Private Streamable HTTP server for the Komodo MCP.
+//! Gateway-authenticated HTTP and local status-only stdio for the Komodo MCP.
 
 pub mod auth;
 pub mod config;
