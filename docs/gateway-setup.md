@@ -43,19 +43,26 @@ annotations:
 cargo run --locked -p komodo-server -- --emit-tools-json
 ```
 
-The existing gateway-specific manifest and reference policy are also available:
+The gateway-specific connection and tool-risk scaffold is also available:
 
 ```sh
 cargo run --locked -p komodo-server -- --emit-gateway-manifest
 ```
 
-Import it using your gateway's deployment procedure. Do not edit the generated
-tool classifications separately from the Rust registry. Standard MCP annotations
-and experimental metadata describe behavior; they grant no permissions. The
-reference policy allows ordinary status reads for authenticated users, requires
-`komodo-admin` for mutations, and separately governs sensitive reads and approval
-requirements. Enforce a deny rule for unauthorized writes even if another policy
-grants broad administrator access.
+This scaffold is not ready to publish: its supported gateway requires an
+`approved_behavior_hash` for each tool, obtained from that gateway's live
+manifest-change preview. Configure its URL and bearer secret reference for your
+deployment, then follow your gateway's admission procedure. Do not maintain a
+separate hand-edited copy of the Rust tool classifications.
+
+Neither export contains an authorization or approval policy. You must configure
+that policy in the gateway. Permit ordinary status reads only for authenticated
+users, require `komodo-admin` for mutations, and separately govern sensitive
+reads and approval requirements. Enforce a deny rule for unauthorized writes
+even if another policy grants broad administrator access. Standard MCP
+annotations and experimental metadata describe behavior; they grant no
+permissions. The server verifies gateway identity but does not implement these
+per-user policy decisions itself.
 
 ## Verify the connection
 

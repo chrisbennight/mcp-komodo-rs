@@ -83,8 +83,10 @@ Mode flags are mutually exclusive:
   have a 30-second deadline. See [stdio limits](quickstart.md#limits-and-failures).
 - `--emit-tools-json` prints the full standard MCP `tools/list` catalog without
   loading runtime credentials. It includes schemas and annotations.
-- `--emit-gateway-manifest` prints the gateway-specific registry and reference
-  policy without loading runtime credentials.
+- `--emit-gateway-manifest` prints a gateway-specific connection and tool-risk
+  scaffold without runtime credentials. It contains no authorization or approval
+  policy and needs gateway-computed behavior hashes before publication; see
+  [gateway deployment](gateway-setup.md#configure-the-gateway-and-server).
 - `--healthcheck` loads only host and port, performs a local `/healthz` request
   with a two-second deadline, and exits. It does not authenticate to the gateway
   or contact Komodo. It is for HTTP mode, not stdio.
