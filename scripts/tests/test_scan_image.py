@@ -28,6 +28,8 @@ with open(os.environ['CALL_LOG'], 'a') as log: log.write(json.dumps(args) + '\\n
 if args[0] == 'save': pathlib.Path(args[args.index('-o')+1]).write_bytes(b'image')
 elif args[0] == 'image': print('sha256:' + '1' * 64)
 elif args[0] == 'run':
+    if '--user' not in args or args[args.index('--user')+1] != f'{os.getuid()}:{os.getgid()}':
+        sys.exit(13)
     mount = pathlib.Path(args[args.index('-v')+1].removesuffix(':/scan'))
     output = args[args.index('--output')+1].removeprefix('/scan/')
     (mount / output).write_text('{}')
