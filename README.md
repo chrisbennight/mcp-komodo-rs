@@ -1,8 +1,8 @@
 # mcp-komodo-rs
 
-`mcp-komodo-rs` is a Rust Model Context Protocol server for bounded
-Komodo operations. It is designed for the homelab MCP tool-search gateway and
-is not a general Komodo API proxy.
+`mcp-komodo-rs` connects MCP clients to Komodo through typed, bounded tools.
+Use it to inspect stacks, deployments, builds, and operations, or to perform
+explicitly authorized deployment and configuration changes.
 
 The repository is named `mcp-komodo-rs`; the executable remains
 `komodo-mcp-rs` for compatibility. Start with the
@@ -10,11 +10,10 @@ The repository is named `mcp-komodo-rs`; the executable remains
 a gateway or administrative credentials. The HTTP profile described below
 provides the full governed tool surface through a gateway.
 
-The current surface exposes operational status plus a small set of typed
-deploy, restart, stop, build, cancel, and pull intents. Sensitive operations are not
-categorically excluded: configuration, Compose, environment, logs, and
-secret-handling tools may be added when they have bounded typed schemas,
-accurate MCP annotations, gateway authorization, and audit-safe handling.
+Local stdio provides ordinary status tools using read credentials. The HTTP
+gateway profile adds deployment actions and sensitive configuration, Compose,
+environment, log, and secret tools. Those capabilities require separate policy
+and approval controls; the local profile does not advertise or dispatch them.
 
 The server will not expose a raw Komodo proxy, arbitrary JSON or actions,
 Docker inspection, Periphery configuration, terminal or shell access, or
@@ -37,10 +36,11 @@ result handling as claims; they do not grant access:
 - a Cedar forbid rule prevents other groups, including broad MCP
   administrators, from bypassing that requirement.
 
-The server also uses two distinct Komodo service-user credentials. Read tools
+The HTTP profile uses two distinct Komodo service-user credentials. Read tools
 can only use the read identity; mutation tools can only use the narrowly
-privileged administrative identity. Infisical injects credentials and gateway
-bearers into the process environment at container creation.
+privileged administrative identity. Your secret provider supplies credentials
+and gateway bearers through the process environment at startup. Infisical is
+one option, not a runtime requirement.
 
 ## Tool surface
 
@@ -122,7 +122,8 @@ that upstream behavior. See [the decisions](DECISIONS.md) and
 
 ## Configuration
 
-Required runtime variables:
+The local profile needs only the read key, read secret, and a Core URL reachable
+from the client process. For the full HTTP gateway profile, provide:
 
 | Variable | Purpose |
 | --- | --- |
@@ -135,9 +136,14 @@ Required runtime variables:
 | `KOMODO_MCP_IDENTITY_ISSUER` | Exact gateway identity-token issuer |
 | `KOMODO_MCP_IDENTITY_ACTOR` | Exact gateway identity-token actor subject |
 
-Optional variables and safe defaults are documented in
-[`.env.example`](.env.example). The previous gateway bearer may be supplied by
-`KOMODO_MCP_GATEWAY_BEARER_PREVIOUS` during rotation.
+See the [complete configuration reference](docs/configuration.md) for every
+setting, default, and bound, and [gateway setup](docs/gateway-setup.md) for the
+deployment contract. [`.env.example`](.env.example) contains placeholders;
+the server does not load dotenv files automatically.
+
+For a source build and contribution workflow, see
+[CONTRIBUTING.md](CONTRIBUTING.md). See [SECURITY.md](SECURITY.md) before reporting
+a suspected vulnerability.
 
 ## Development
 

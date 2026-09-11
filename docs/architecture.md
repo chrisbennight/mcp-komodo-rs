@@ -25,20 +25,21 @@ compatibility representation supplied by the MCP library.
 
 ## Network boundary
 
-The production container joins two networks:
+One supported deployment layout uses two private networks:
 
-- the existing Komodo private network, used only to reach Komodo Core; and
-- `komodo_mcp_private`, used only by the MCP gateway.
+- a Komodo network, used only to reach Komodo Core; and
+- a separate ingress network, used only by the MCP gateway.
 
 The gateway does not join Komodo's network, and the MCP service publishes no
-host port or Traefik route. This keeps upstream credentials and direct Komodo
+host port or public reverse-proxy route. This keeps upstream credentials and direct Komodo
 access out of the gateway container while preserving a single authenticated
 MCP ingress.
 
 ## Secret flow
 
-Infisical injects the read key/secret, admin key/secret, and current or optional
-previous gateway bearer into the container environment during Compose startup.
+The operator's secret provider injects the read key/secret, admin key/secret,
+and current or optional previous gateway bearer into the process environment
+at startup. Infisical and Compose are optional deployment choices.
 Secret values do not appear in the Compose file, Komodo stack configuration,
 command arguments, logs, or health output. Host users with Docker inspection
 access remain inside the trusted infrastructure boundary and can inspect a

@@ -9,7 +9,9 @@ information and should be treated as untrusted data by the model.
 
 ## Build
 
-Install Git and Rust through rustup, then:
+Use Linux with Git, a C compiler/linker, and Rust installed through rustup.
+The supported container builder uses Debian's Rust image; other source-build
+platforms are not yet verified. Then:
 
 ```sh
 git clone https://github.com/chrisbennight/mcp-komodo-rs.git

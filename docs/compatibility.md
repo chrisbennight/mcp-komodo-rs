@@ -33,7 +33,7 @@ and checks status calls and denied operations against a loopback fake Core.
 | --- | --- | --- |
 | Komodo Core | 2.1.2 request/response shapes | Loopback wire tests; no live deployment certification |
 | MCP | 2025-11-25 | Pinned rmcp SDK and binary stdio integration test |
-| HTTP access | Gateway bearer plus verified identity JWT | Authentication and ingress regression tests |
+| HTTP access | Gateway bearer plus verified identity JWT | Production-router status call with loopback JWKS/Core and rejected bearer/JWT tests |
 | Local access | Status-only stdio, process-owner trust | Binary initialization, discovery, call and denial tests |
-| Published container | Linux amd64 | Source-image liveness smoke test |
+| Container build target | Linux amd64 | Source-image liveness smoke test |
 | Source builds | Pinned Rust toolchain on Linux | Hosted Ubuntu checks; other operating systems unverified |
