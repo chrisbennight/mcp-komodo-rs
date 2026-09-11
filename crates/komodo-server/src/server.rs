@@ -227,7 +227,7 @@ mod tests {
             identity: IdentityVerifierSettings {
                 jwks_url: Url::parse("http://127.0.0.1:65534/jwks").expect("JWKS URL"),
                 issuer: "https://gateway.test".into(),
-                actor: "mcp.cacahuate.org".into(),
+                actor: "gateway.example.com".into(),
                 request_timeout: Duration::from_secs(1),
                 cache_ttl: Duration::from_mins(1),
             },

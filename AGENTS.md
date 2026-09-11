@@ -5,7 +5,7 @@
 This repository owns the Rust Komodo MCP server, its image, and source-image
 tests. Production Compose, Infisical references, Komodo stack configuration,
 gateway policy publication, and live server manifests belong in their
-respective homelab repositories or control planes.
+operator-owned deployment repositories or control planes.
 
 Use an isolated worktree for every change. Search before adding a module, tool,
 or dependency. Keep each pull request behaviorally complete and small enough to

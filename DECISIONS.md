@@ -9,10 +9,10 @@ contract reviewable per tool.
 
 ## Separate read and administrative identities
 
-Every handler is wired to exactly one of two Komodo clients. Read tools cannot
-accidentally gain mutation authority; mutations cannot silently fall back to
-the read credential. Both credential pairs arrive through the process
-environment at startup. Operators may use any secret provider that can supply
+In the HTTP profile, each handler uses the read or administrative Komodo client.
+Read tools cannot gain mutation authority; mutations cannot fall back to the
+read credential. Local stdio constructs only a read client and rejects sensitive
+and mutating tools. Credentials arrive through the process environment at startup. Operators may use any secret provider that can supply
 that environment; the server has no Infisical dependency or credential-file
 interface.
 
