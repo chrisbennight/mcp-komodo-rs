@@ -1,0 +1,63 @@
+[
+  {
+    "name": "jsonschema-regex",
+    "version": "0.52.1",
+    "vcsCommit": "94546ceb734c6076e73c4a6723de98804ad63ae6",
+    "files": [
+      "licenses/overrides/jsonschema-LICENSE"
+    ],
+    "source": "https://github.com/Stranger6667/jsonschema/blob/94546ceb734c6076e73c4a6723de98804ad63ae6/LICENSE",
+    "reason": "The published crate omits its workspace license file."
+  },
+  {
+    "name": "jsonschema-value",
+    "version": "0.52.1",
+    "vcsCommit": "94546ceb734c6076e73c4a6723de98804ad63ae6",
+    "files": [
+      "licenses/overrides/jsonschema-LICENSE"
+    ],
+    "source": "https://github.com/Stranger6667/jsonschema/blob/94546ceb734c6076e73c4a6723de98804ad63ae6/LICENSE",
+    "reason": "The published crate omits its workspace license file."
+  },
+  {
+    "name": "rmcp",
+    "version": "2.2.0",
+    "vcsCommit": "519577601db3823616dbd7c4eb84ed569d8e17d4",
+    "files": [
+      "licenses/overrides/rust-sdk-LICENSE"
+    ],
+    "source": "https://github.com/modelcontextprotocol/rust-sdk/blob/519577601db3823616dbd7c4eb84ed569d8e17d4/LICENSE",
+    "reason": "The published crate omits its workspace license file."
+  },
+  {
+    "name": "uuid-simd",
+    "version": "0.8.0",
+    "vcsCommit": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+    "files": [
+      "licenses/overrides/simd-LICENSE"
+    ],
+    "source": "https://github.com/Nugine/simd/blob/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+    "reason": "The published crate omits its workspace license file."
+  },
+  {
+    "name": "vsimd",
+    "version": "0.8.0",
+    "vcsCommit": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+    "files": [
+      "licenses/overrides/simd-LICENSE"
+    ],
+    "source": "https://github.com/Nugine/simd/blob/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+    "reason": "The published crate omits its workspace license file."
+  },
+  {
+    "name": "sse-stream",
+    "version": "0.2.4",
+    "vcsCommit": "92dcf45bf1917324e60378bddbc92de3ed258eb0",
+    "files": [
+      "licenses/overrides/Apache-2.0.txt"
+    ],
+    "source": "https://github.com/4t145/sse-stream/blob/92dcf45bf1917324e60378bddbc92de3ed258eb0/Cargo.toml",
+    "reason": "The crate declares MIT OR Apache-2.0 but includes neither license file. Include the Apache-2.0 license option using the canonical ASF text.",
+    "licenseTextSource": "https://github.com/apache/www-site/blob/765f7b31da992059bfa35cf04640b965c9f9f556/content/licenses/LICENSE-2.0.txt"
+  }
+]
