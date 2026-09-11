@@ -5,8 +5,10 @@ Komodo operations. It is designed for the homelab MCP tool-search gateway and
 is not a general Komodo API proxy.
 
 The repository is named `mcp-komodo-rs`; the executable remains
-`komodo-mcp-rs` for compatibility. The current runtime requires the gateway
-integration described below. A standalone client setup is not yet provided.
+`komodo-mcp-rs` for compatibility. Start with the
+[local status-only quickstart](docs/quickstart.md) for a stdio MCP client without
+a gateway or administrative credentials. The HTTP profile described below
+provides the full governed tool surface through a gateway.
 
 The current surface exposes operational status plus a small set of typed
 deploy, restart, stop, build, cancel, and pull intents. Sensitive operations are not
