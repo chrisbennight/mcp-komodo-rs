@@ -1,9 +1,27 @@
 # Security policy
 
-Report vulnerabilities privately to the repository owner. Do not include live
+Use GitHub's [private vulnerability report form](https://github.com/chrisbennight/mcp-komodo-rs/security/advisories/new)
+when it is enabled for your account and this repository. If the form is
+unavailable, do not create a public issue containing vulnerability details;
+the maintainer must enable private reporting before public release. This route
+has not yet been verified during migration.
+
+Do not include live
 credentials, tokens, Komodo configuration, logs, or Docker runtime data in an
 issue, pull request, test fixture, review comment, command argument, or
 diagnostic output.
+
+Include the affected commit or release, the violated security boundary,
+synthetic reproduction steps, and the observed impact. Do not run a proof of
+concept against a deployment you do not own or administer. No response-time
+guarantee or bug bounty is offered.
+
+## Supported versions
+
+During preparation, security fixes target the current `main` branch. There are
+no supported stable release lines yet. Release tags and a supported-version
+table will be added when stable releases are published; old snapshots should
+not be assumed to receive backports.
 
 Security-sensitive surfaces include:
 

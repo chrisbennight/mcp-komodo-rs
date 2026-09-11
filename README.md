@@ -37,8 +37,9 @@ result handling as claims; they do not grant access:
 
 The server also uses two distinct Komodo service-user credentials. Read tools
 can only use the read identity; mutation tools can only use the narrowly
-privileged administrative identity. Infisical injects credentials and gateway
-bearers into the process environment at container creation.
+privileged administrative identity. Your secret provider supplies credentials
+and gateway bearers through the process environment at startup. Infisical is
+one option, not a runtime requirement.
 
 ## Tool surface
 
@@ -126,9 +127,14 @@ Required runtime variables:
 | `KOMODO_MCP_IDENTITY_ISSUER` | Exact gateway identity-token issuer |
 | `KOMODO_MCP_IDENTITY_ACTOR` | Exact gateway identity-token actor subject |
 
-Optional variables and safe defaults are documented in
-[`.env.example`](.env.example). The previous gateway bearer may be supplied by
-`KOMODO_MCP_GATEWAY_BEARER_PREVIOUS` during rotation.
+See the [complete configuration reference](docs/configuration.md) for every
+setting, default, and bound, and [gateway setup](docs/gateway-setup.md) for the
+deployment contract. [`.env.example`](.env.example) contains placeholders;
+the server does not load dotenv files automatically.
+
+For a source build and contribution workflow, see
+[CONTRIBUTING.md](CONTRIBUTING.md). See [SECURITY.md](SECURITY.md) before reporting
+a suspected vulnerability.
 
 ## Development
 

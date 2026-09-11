@@ -11,8 +11,10 @@ contract reviewable per tool.
 
 Every handler is wired to exactly one of two Komodo clients. Read tools cannot
 accidentally gain mutation authority; mutations cannot silently fall back to
-the read credential. Infisical supplies both credential pairs as files at
-runtime.
+the read credential. Both credential pairs arrive through the process
+environment at startup. Operators may use any secret provider that can supply
+that environment; the server has no Infisical dependency or credential-file
+interface.
 
 ## Governed sensitive capabilities
 
