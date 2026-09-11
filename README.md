@@ -78,7 +78,14 @@ Administrative tools:
   and `stacks.webhook.secret.write` (custom secret).
 
 Search output is locally filtered, sorted, and capped at 50 items.
-`operations.search` page indices are capped at 100, while `operations.status`
+Resource pages never advertise an offset beyond 10000. `truncated: true` means
+matching items remain beyond that supported range; narrow the query. Each
+request fetches the bounded upstream inventory before local filtering, so an
+upstream body larger than two MiB still fails rather than silently truncating.
+`operations.search` page indices are capped at 100. Searches return `nextOffset` for
+remaining matches within the same page; follow it before `nextPage`, then reset
+offset to zero when changing pages. Page contents can change as new operations
+arrive, so these cursors are not snapshot guarantees. `operations.status`
 resolves one operation by its stable id rather than a moving page (its former
 `page` argument is accepted but ignored for one release). `stacks.diagnostics`
 returns bounded operational signals — state, Docker status text, missing Compose
@@ -133,6 +140,17 @@ Optional variables and safe defaults are documented in
 `KOMODO_MCP_GATEWAY_BEARER_PREVIOUS` during rotation.
 
 ## Development
+
+Export a standard MCP `tools/list` catalog without runtime credentials:
+
+```sh
+cargo run --locked -p komodo-server -- --emit-tools-json
+```
+
+This JSON contains the full supported surface and annotations. Import it using
+your gateway's own policy procedure; metadata does not grant authority. Local
+stdio `tools/list` advertises only the status profile. The existing gateway
+manifest remains an optional integration scaffold.
 
 Rust 1.96 is pinned. Required local gates are:
 

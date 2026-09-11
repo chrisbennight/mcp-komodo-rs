@@ -308,4 +308,114 @@ mod tests {
             assert_eq!(response.status(), expected);
         }
     }
+
+    #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep the complete HTTP boundary scenario visible in one test"
+    )]
+    async fn authenticated_http_transport_reaches_only_the_read_upstream_for_status() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ed25519_dalek::{SigningKey, pkcs8::EncodePrivateKey};
+        use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+        use serde_json::json;
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{body_json, header as matches_header, method, path},
+        };
+
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/read"))
+            .and(matches_header("x-api-key", "read"))
+            .and(body_json(json!({"type":"GetVersion","params":{}})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":"2.1.2"})))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        let jwks = MockServer::start().await;
+        let signing = SigningKey::from_bytes(&[7; 32]);
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"keys":[{
+                "kty":"OKP", "use":"sig", "crv":"Ed25519", "kid":"test-key", "alg":"EdDSA",
+                "x":URL_SAFE_NO_PAD.encode(signing.verifying_key().as_bytes())
+            }]})))
+            .mount(&jwks)
+            .await;
+        let mut config = settings();
+        config.identity.jwks_url = Url::parse(&format!("{}/jwks", jwks.uri())).unwrap();
+        config.identity.actor = "gateway.test".into();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let claims = json!({"sub":"test-user", "iss":"https://gateway.test", "aud":"komodo",
+            "iat":now, "exp":now+60, "groups":[], "act":{"sub":"gateway.test"}});
+        let mut token_header = Header::new(Algorithm::EdDSA);
+        token_header.kid = Some("test-key".into());
+        let key = signing.to_pkcs8_der().unwrap();
+        let token = encode(
+            &token_header,
+            &claims,
+            &EncodingKey::from_ed_der(key.as_bytes()),
+        )
+        .unwrap();
+        let read = komodo_api::Client::new(
+            Url::parse(&upstream.uri()).unwrap(),
+            config.read_credentials.clone(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let router = build_router(
+            &config,
+            KomodoMcp::new(Arc::new(read), Arc::new(UnavailableApi)),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        for (bearer, identity, expected) in [
+            ("wrong", token.as_str(), StatusCode::UNAUTHORIZED),
+            (
+                "0123456789abcdef0123456789abcdef",
+                "invalid",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "0123456789abcdef0123456789abcdef",
+                token.as_str(),
+                StatusCode::OK,
+            ),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/mcp")
+                        .header(header::HOST, "localhost")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header(header::ACCEPT, "application/json, text/event-stream")
+                        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                        .header("X-MCP-Identity", identity)
+                        .header("MCP-Protocol-Version", "2025-11-25")
+                        .body(Body::from(
+                            json!({"jsonrpc":"2.0", "id":1,"method":"tools/call",
+                    "params":{"name":"system.status","arguments":{}}})
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+            if expected == StatusCode::OK {
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(
+                    body["result"]["structuredContent"],
+                    json!({"version":"2.1.2","reachable":true})
+                );
+            }
+        }
+    }
 }

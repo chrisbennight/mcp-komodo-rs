@@ -157,3 +157,20 @@ async fn idle_open_stdin_does_not_prevent_exit_after_initialization_timeout() {
         .unwrap();
     assert!(diagnostics.contains("MCP initialization timed out"));
 }
+
+#[tokio::test]
+async fn portable_catalog_export_requires_no_runtime_credentials() {
+    let output = Command::new(env!("CARGO_BIN_EXE_komodo-mcp-rs"))
+        .arg("--emit-tools-json")
+        .env_clear()
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let catalog: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        catalog,
+        serde_json::to_value(komodo_mcp::KomodoMcp::list_tools_payload()).unwrap()
+    );
+}
