@@ -11,6 +11,44 @@ use crate::auth::{AuthConfigError, GatewayBearers, IdentityVerifierSettings};
 const MAXIMUM_SECRET_BYTES: usize = 16 * 1024;
 type EnvironmentLookup<'a> = dyn Fn(&'static str) -> Result<String, env::VarError> + 'a;
 
+/// Configuration needed by a local status-only process.
+#[derive(Debug)]
+pub struct ReadSettings {
+    pub upstream_url: Url,
+    pub upstream_timeout: Duration,
+    pub credentials: Credentials,
+}
+
+impl ReadSettings {
+    /// Load read credentials and upstream coordinates, without gateway or admin secrets.
+    ///
+    /// # Errors
+    /// Returns an error for missing credentials or invalid connection settings.
+    pub fn from_env() -> Result<Self, SettingsError> {
+        Self::from_environment(&|variable| env::var(variable))
+    }
+
+    fn from_environment(environment: &EnvironmentLookup<'_>) -> Result<Self, SettingsError> {
+        Ok(Self {
+            credentials: Credentials::from_protected(
+                required_secret(environment, "KOMODO_MCP_READ_API_KEY")?,
+                required_secret(environment, "KOMODO_MCP_READ_API_SECRET")?,
+            )?,
+            upstream_url: parse_url(
+                "KOMODO_MCP_UPSTREAM_URL",
+                &value_or(environment, "KOMODO_MCP_UPSTREAM_URL", "http://core:9120/"),
+            )?,
+            upstream_timeout: Duration::from_secs(parse_number(
+                environment,
+                "KOMODO_MCP_UPSTREAM_TIMEOUT_SECONDS",
+                20_u64,
+                1,
+                120,
+            )?),
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct Settings {
     pub host: String,
@@ -64,10 +102,7 @@ impl Settings {
 
     fn from_environment(environment: &EnvironmentLookup<'_>) -> Result<Self, SettingsError> {
         let listener = Self::listener_from_environment(environment)?;
-        let read_credentials = Credentials::from_protected(
-            required_secret(environment, "KOMODO_MCP_READ_API_KEY")?,
-            required_secret(environment, "KOMODO_MCP_READ_API_SECRET")?,
-        )?;
+        let read = ReadSettings::from_environment(environment)?;
         let admin_credentials = Credentials::from_protected(
             required_secret(environment, "KOMODO_MCP_ADMIN_API_KEY")?,
             required_secret(environment, "KOMODO_MCP_ADMIN_API_SECRET")?,
@@ -83,18 +118,9 @@ impl Settings {
             host: listener.host,
             port: listener.port,
             log_level: value_or(environment, "KOMODO_MCP_LOG_LEVEL", "info"),
-            upstream_url: parse_url(
-                "KOMODO_MCP_UPSTREAM_URL",
-                &value_or(environment, "KOMODO_MCP_UPSTREAM_URL", "http://core:9120/"),
-            )?,
-            upstream_timeout: Duration::from_secs(parse_number(
-                environment,
-                "KOMODO_MCP_UPSTREAM_TIMEOUT_SECONDS",
-                20_u64,
-                1,
-                120,
-            )?),
-            read_credentials,
+            upstream_url: read.upstream_url,
+            upstream_timeout: read.upstream_timeout,
+            read_credentials: read.credentials,
             admin_credentials,
             allowed_hosts: parse_csv(&value_or(
                 environment,

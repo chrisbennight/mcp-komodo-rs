@@ -25,4 +25,15 @@ headers against the exact target tag. Run loopback wire tests with adversarial
 sentinel values in every excluded field.
 
 The MCP protocol version is `2025-11-25`, served through stateless Streamable
-HTTP at `/mcp`.
+HTTP at `/mcp`, or local status-only stdio with `--stdio`. The stdio integration
+test launches the real executable, negotiates this protocol version, lists tools,
+and checks status calls and denied operations against a loopback fake Core.
+
+| Component | Supported contract | Evidence |
+| --- | --- | --- |
+| Komodo Core | 2.1.2 request/response shapes | Loopback wire tests; no live deployment certification |
+| MCP | 2025-11-25 | Pinned rmcp SDK and binary stdio integration test |
+| HTTP access | Gateway bearer plus verified identity JWT | Production-router status call with loopback JWKS/Core and rejected bearer/JWT tests |
+| Local access | Status-only stdio, process-owner trust | Binary initialization, discovery, call and denial tests |
+| Container build target | Linux amd64 | Source-image liveness smoke test |
+| Source builds | Pinned Rust toolchain on Linux | Hosted Ubuntu checks; other operating systems unverified |

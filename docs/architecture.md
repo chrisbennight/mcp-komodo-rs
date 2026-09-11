@@ -61,5 +61,7 @@ additional payload copies.
 
 Idempotent reads retry once only on an unavailable transport. Mutations are
 sent exactly once. An unavailable response after a mutation is an ambiguous
-outcome; callers reconcile through bounded operation status instead of replaying
-the intent. Upstream response bodies are never returned as errors.
+outcome. When no receipt is available, the error names the stable target and
+the relevant read tool without echoing submitted values. Follow the
+[operation-specific reconciliation guide](reconciliation.md) instead of
+replaying the intent. Upstream response bodies are never returned as errors.

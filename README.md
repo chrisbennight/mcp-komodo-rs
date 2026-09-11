@@ -1,18 +1,19 @@
 # mcp-komodo-rs
 
-`mcp-komodo-rs` is a Rust Model Context Protocol server for bounded
-Komodo operations. It is designed for the homelab MCP tool-search gateway and
-is not a general Komodo API proxy.
+`mcp-komodo-rs` connects MCP clients to Komodo through typed, bounded tools.
+Use it to inspect stacks, deployments, builds, and operations, or to perform
+explicitly authorized deployment and configuration changes.
 
 The repository is named `mcp-komodo-rs`; the executable remains
-`komodo-mcp-rs` for compatibility. The current runtime requires the gateway
-integration described below. A standalone client setup is not yet provided.
+`komodo-mcp-rs` for compatibility. Start with the
+[local status-only quickstart](docs/quickstart.md) for a stdio MCP client without
+a gateway or administrative credentials. The HTTP profile described below
+provides the full governed tool surface through a gateway.
 
-The current surface exposes operational status plus a small set of typed
-deploy, restart, stop, build, cancel, and pull intents. Sensitive operations are not
-categorically excluded: configuration, Compose, environment, logs, and
-secret-handling tools may be added when they have bounded typed schemas,
-accurate MCP annotations, gateway authorization, and audit-safe handling.
+Local stdio provides ordinary status tools using read credentials. The HTTP
+gateway profile adds deployment actions and sensitive configuration, Compose,
+environment, log, and secret tools. Those capabilities require separate policy
+and approval controls; the local profile does not advertise or dispatch them.
 
 The server will not expose a raw Komodo proxy, arbitrary JSON or actions,
 Docker inspection, Periphery configuration, terminal or shell access, or
@@ -35,7 +36,7 @@ result handling as claims; they do not grant access:
 - a Cedar forbid rule prevents other groups, including broad MCP
   administrators, from bypassing that requirement.
 
-The server also uses two distinct Komodo service-user credentials. Read tools
+The HTTP profile uses two distinct Komodo service-user credentials. Read tools
 can only use the read identity; mutation tools can only use the narrowly
 privileged administrative identity. Your secret provider supplies credentials
 and gateway bearers through the process environment at startup. Infisical is
@@ -77,7 +78,14 @@ Administrative tools:
   and `stacks.webhook.secret.write` (custom secret).
 
 Search output is locally filtered, sorted, and capped at 50 items.
-`operations.search` page indices are capped at 100, while `operations.status`
+Resource pages never advertise an offset beyond 10000. `truncated: true` means
+matching items remain beyond that supported range; narrow the query. Each
+request fetches the bounded upstream inventory before local filtering, so an
+upstream body larger than two MiB still fails rather than silently truncating.
+`operations.search` page indices are capped at 100. Searches return `nextOffset` for
+remaining matches within the same page; follow it before `nextPage`, then reset
+offset to zero when changing pages. Page contents can change as new operations
+arrive, so these cursors are not snapshot guarantees. `operations.status`
 resolves one operation by its stable id rather than a moving page (its former
 `page` argument is accepted but ignored for one release). `stacks.diagnostics`
 returns bounded operational signals — state, Docker status text, missing Compose
@@ -114,7 +122,8 @@ that upstream behavior. See [the decisions](DECISIONS.md) and
 
 ## Configuration
 
-Required runtime variables:
+The local profile needs only the read key, read secret, and a Core URL reachable
+from the client process. For the full HTTP gateway profile, provide:
 
 | Variable | Purpose |
 | --- | --- |
@@ -137,6 +146,17 @@ For a source build and contribution workflow, see
 a suspected vulnerability.
 
 ## Development
+
+Export a standard MCP `tools/list` catalog without runtime credentials:
+
+```sh
+cargo run --locked -p komodo-server -- --emit-tools-json
+```
+
+This JSON contains the full supported surface and annotations. Import it using
+your gateway's own policy procedure; metadata does not grant authority. Local
+stdio `tools/list` advertises only the status profile. The existing gateway
+manifest remains an optional integration scaffold.
 
 Rust 1.96 is pinned. Required local gates are:
 

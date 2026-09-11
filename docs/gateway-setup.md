@@ -4,7 +4,7 @@ The HTTP server requires a gateway that implements the identity and policy
 contract below. An ordinary MCP client cannot connect directly using only a
 Komodo API key. The service does not implement OAuth discovery or interactive
 login. This guide describes integration prerequisites, not a standalone client
-quickstart.
+quickstart. For a local client, use the [status-only quickstart](quickstart.md).
 
 ## Prepare Komodo access
 
@@ -36,7 +36,14 @@ match the server's allowlist. The gateway owns user authentication, tool-level
 authorization, approval, and safe audit storage. Membership in a network is not
 authorization.
 
-Generate the tool catalog with:
+Export the standard MCP catalog for a gateway that consumes tool schemas and
+annotations:
+
+```sh
+cargo run --locked -p komodo-server -- --emit-tools-json
+```
+
+The existing gateway-specific manifest and reference policy are also available:
 
 ```sh
 cargo run --locked -p komodo-server -- --emit-gateway-manifest
@@ -57,7 +64,9 @@ that the process is serving requests. Through your configured gateway and MCP
 client, initialize the connection, list tools, then call `system.status` with
 `{}`. This is the first check that exercises upstream read credentials. Confirm
 an unauthorized identity cannot invoke a mutation before enabling operational
-use. Test mutations only against disposable resources.
+use. Test mutations only against disposable resources. Follow
+[write reconciliation](reconciliation.md) when no usable receipt is returned;
+never automatically repeat a timed-out write.
 
 An HTTP 401 from `/mcp` can indicate a Host/Origin mismatch, bearer mismatch,
 unverifiable identity token, stale timestamps, or JWKS failure. Inspect the

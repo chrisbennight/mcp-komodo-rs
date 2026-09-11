@@ -1,5 +1,10 @@
 # Tool surface
 
+For uncertain write results, use the
+[operation-specific reconciliation guide](reconciliation.md). Metadata exports
+describe the tools; gateway authorization and sensitive-read approvals remain
+separate requirements.
+
 ## Read contract
 
 Ordinary status tools expose only resource ids, names, normalized state,

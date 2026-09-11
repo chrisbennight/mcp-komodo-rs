@@ -7,8 +7,8 @@ for vulnerabilities; do not post a credential or a real configuration payload.
 
 ## Build and check
 
-Install Rust through rustup, Python 3, and Git. The checked-in toolchain file
-selects the supported Rust version and components. Docker is needed only for
+Install Rust through rustup, a C compiler/linker, Python 3, and Git on Linux.
+The checked-in toolchain file selects the supported Rust version and components. Docker is needed only for
 the image test.
 
 ```sh

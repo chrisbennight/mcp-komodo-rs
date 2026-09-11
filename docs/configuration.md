@@ -5,6 +5,17 @@ read `.env` or secret files. Use your service manager or secret provider to
 supply values without putting credentials in command arguments or source files.
 Restart the process after changing configuration.
 
+## Select a profile
+
+Start with `--stdio` for local status tools. This mode loads only the read key,
+read secret, upstream URL, and upstream timeout. It opens no listener and does
+not load admin credentials or gateway settings. The parent MCP client owns
+access to the process; see the [quickstart](quickstart.md).
+
+Starting without a mode flag selects the full HTTP gateway profile. All settings
+marked required below apply to that profile. Listener and gateway variables do
+not change stdio limits.
+
 ## Komodo connection
 
 | Variable | Default | Contract |
@@ -12,8 +23,8 @@ Restart the process after changing configuration.
 | `KOMODO_MCP_UPSTREAM_URL` | `http://core:9120/` | Core base URL, with no path other than `/`, user information, query, or fragment |
 | `KOMODO_MCP_READ_API_KEY` | Required | Read service-user API key |
 | `KOMODO_MCP_READ_API_SECRET` | Required | Read service-user API secret |
-| `KOMODO_MCP_ADMIN_API_KEY` | Required | Separate administrative service-user API key |
-| `KOMODO_MCP_ADMIN_API_SECRET` | Required | Administrative service-user API secret |
+| `KOMODO_MCP_ADMIN_API_KEY` | Required in HTTP mode | Separate administrative service-user API key |
+| `KOMODO_MCP_ADMIN_API_SECRET` | Required in HTTP mode | Administrative service-user API secret |
 | `KOMODO_MCP_UPSTREAM_TIMEOUT_SECONDS` | `20` | Integer, 1–120 seconds per upstream request |
 
 Credential values must contain 1–16384 UTF-8 bytes and no CR or LF. They are
@@ -61,11 +72,21 @@ credential values and the identity actor are not.
 
 The HTTP request deadline and upstream timeout are independent. A timeout during
 a write can leave an uncertain outcome; do not repeat the write automatically.
-See [failure semantics](architecture.md#failure-semantics).
+See [write reconciliation](reconciliation.md).
 
 ## Command-line modes
 
-`--emit-gateway-manifest` prints the generated registry without loading runtime
-credentials. `--healthcheck` loads only host and port, performs a local
-`/healthz` request with a two-second deadline, and exits. It does not authenticate
-to the gateway or contact Komodo. `--help` and `--version` are also available.
+Mode flags are mutually exclusive:
+
+- `--stdio` serves the local status profile over stdin/stdout. Frames are limited
+  to 64 KiB, with at most 32 pending requests. Initialization and output each
+  have a 30-second deadline. See [stdio limits](quickstart.md#limits-and-failures).
+- `--emit-tools-json` prints the full standard MCP `tools/list` catalog without
+  loading runtime credentials. It includes schemas and annotations.
+- `--emit-gateway-manifest` prints the gateway-specific registry and reference
+  policy without loading runtime credentials.
+- `--healthcheck` loads only host and port, performs a local `/healthz` request
+  with a two-second deadline, and exits. It does not authenticate to the gateway
+  or contact Komodo. It is for HTTP mode, not stdio.
+
+`--help` and `--version` are also available.
