@@ -42,6 +42,8 @@ sensitive_paths:
   - scripts/publish_image.py
   - scripts/scan_image.sh
   - scripts/record_build.py
+  - scripts/package_notices.py
+  - licenses/**
   - deny.toml
   - .github/dependabot.yml
 impact_map:
@@ -56,6 +58,7 @@ impact_map:
   scripts/publish_image.py: "Validated GHCR publication and workflow credential handling"
   scripts/scan_image.sh: "Container and source inventory with vulnerability gating"
   scripts/record_build.py: "Unsigned source/image identity and evidence hashes"
+  scripts/package_notices.py: "Dependency notice provenance and bounded archive paths"
   deny.toml: "Dependency advisory, source and license policy"
 research:
   enabled: true

@@ -44,6 +44,13 @@ workflow before rerunning it rather than assuming nothing was published.
 The current workflow builds `linux/amd64` on a GitHub-hosted Ubuntu runner.
 Other platforms and standalone release binaries are not published yet.
 
+The test job also packages Rust dependency license notices, including nested
+vendor notices, from the locked Linux graph. It retains
+`dependency-notices.zip`, its index, and a SHA-256 checksum for 90 days under
+`dependency-notices-<source SHA>`. Missing notices fail the test job before
+publication. Reviewed exact-version overrides cover crate archives that omit
+their license files; see [notice provenance](../licenses/README.md).
+
 ## Dependency and image evidence
 
 The `dependencies` job runs Cargo Deny against the supported Linux target,
@@ -104,3 +111,20 @@ both private during preparation. Before advertising a public image, deliberately
 publish the package and verify that a user with no registry credentials can
 pull the documented digest. Complete the source/dependency review, security
 reporting setup and runnable onboarding instructions before a public release.
+
+## Release record
+
+Before creating a version tag, use a reviewed main commit, verify its checks,
+and prepare release notes describing user-visible changes, compatibility,
+configuration changes, and known limitations. A first release must identify
+the supported Linux container target and available access profiles accurately;
+do not imply untested operating systems or clients are supported.
+
+After the tag workflow succeeds, record the registry manifest digest and exact
+source commit in the release notes. Download both the image-evidence and
+dependency-notices artifacts for that workflow, verify the notice checksum with
+`sha256sum -c dependency-notices.sha256`, and attach the files to the durable
+GitHub release record before advertising it. Actions retention is temporary.
+Retain the full OS report and review base-image distribution obligations in
+addition to the Rust notice archive. The unsigned build record is supporting
+evidence; it is not a signed registry-digest attestation.
