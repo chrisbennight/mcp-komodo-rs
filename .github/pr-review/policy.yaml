@@ -40,6 +40,10 @@ sensitive_paths:
   - .github/pr-review/**
   - scripts/test_image.sh
   - scripts/publish_image.py
+  - scripts/scan_image.sh
+  - scripts/record_build.py
+  - deny.toml
+  - .github/dependabot.yml
 impact_map:
   crates/komodo-api/**: "Komodo credential, request, response-bound, retry, and sensitive-field normalization boundary"
   crates/komodo-mcp/**: "Model-visible schemas, tool dispatch, annotations, and gateway classification registry"
@@ -50,6 +54,9 @@ impact_map:
   .github/pr-review/**: "AERB review and security policy"
   scripts/test_image.sh: "Isolated source-image validation"
   scripts/publish_image.py: "Validated GHCR publication and workflow credential handling"
+  scripts/scan_image.sh: "Container and source inventory with vulnerability gating"
+  scripts/record_build.py: "Unsigned source/image identity and evidence hashes"
+  deny.toml: "Dependency advisory, source and license policy"
 research:
   enabled: true
   max_collect_steps: 15

@@ -51,7 +51,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("GITHUB_TOKEN", ordinary)
         self.assertIn("github.event_name == 'push'", publication)
         self.assertIn("github.repository == 'chrisbennight/mcp-komodo-rs'", publication)
-        self.assertIn("needs: test", publication)
+        self.assertIn("needs: [test, dependencies]", publication)
+        self.assertLess(publication.index("bash scripts/scan_image.sh"), publication.index("GITHUB_TOKEN:"))
         self.assertIn("packages: write", publication)
         self.assertLess(
             publication.index("bash scripts/test_image.sh"),
