@@ -6,7 +6,7 @@ names are unchanged; containers still run `/komodo-mcp-rs`.
 ## Validation
 
 GitHub Actions runs the Rust and documentation checks listed in
-[the development instructions](../README.md#development). Pull requests then
+[the development instructions](../CONTRIBUTING.md#build-and-check). Pull requests then
 build the source image and check its liveness endpoint without access to Komodo
 or the gateway. The smoke container has no network, published port, or real
 credentials. A healthy result confirms liveness, not upstream connectivity.

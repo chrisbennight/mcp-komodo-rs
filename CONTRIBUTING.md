@@ -8,8 +8,8 @@ for vulnerabilities; do not post a credential or a real configuration payload.
 ## Build and check
 
 Install Rust through rustup, a C compiler/linker, Python 3, and Git on Linux.
-The checked-in toolchain file selects the supported Rust version and components. Docker is needed only for
-the image test.
+The checked-in toolchain file selects the supported Rust version and components.
+Docker is needed only for the image test.
 
 ```sh
 git clone https://github.com/chrisbennight/mcp-komodo-rs.git
@@ -19,8 +19,20 @@ cargo run --locked -p komodo-server -- --help
 ```
 
 The repository is private during preparation, so cloning currently requires
-access. Cargo uses public dependencies; no lab registry is needed. Run all
-[development checks](README.md#development) before submitting a pull request.
+access. Cargo uses public dependencies; no lab registry is needed. Run these
+checks before submitting a pull request:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+cargo doc --workspace --no-deps --locked
+python3 scripts/check_docs.py
+python3 -m unittest discover -s scripts/tests
+```
+
+For visual changes, also follow the [branding guide](docs/branding/README.md).
+
 Use `bash scripts/test_image.sh` to build and smoke the container. Tests use
 loopback fakes and synthetic credentials; never point them at a live deployment.
 

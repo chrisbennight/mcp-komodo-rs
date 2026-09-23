@@ -5,6 +5,83 @@ For uncertain write results, use the
 describe the tools; gateway authorization and sensitive-read approvals remain
 separate requirements.
 
+## Available tools
+
+Read-only tools:
+
+- `system.status`;
+- `servers.search` and `servers.status`;
+- `stacks.search`, `stacks.status`, and `stacks.diagnostics`;
+- `deployments.search` and `deployments.status`;
+- `builds.search` and `builds.status`;
+- `repos.search` and `repos.status`; and
+- `operations.search` and `operations.status`.
+
+Governed reads over stack configuration and content (content-bearing results
+are labeled sensitive and untrusted; `stacks.webhook.status` returns only
+metadata and is not sensitive):
+
+- `stacks.config.read` — configuration shape and presence flags, no raw payloads;
+- `stacks.compose.read` — Compose contents for a configured, latest, or deployed source;
+- `stacks.environment.read` and `stacks.commands.read`;
+- `stacks.webhook.secret.read`;
+- `stacks.logs.tail` and `operations.logs.read`; and
+- `stacks.webhook.status` — enabled, force-deploy, and secret-source metadata only.
+
+Administrative tools:
+
+- `stacks.deploy`, `stacks.restart`, and `stacks.stop`;
+- `deployments.deploy` and `deployments.restart`;
+- `builds.run` and `builds.cancel`;
+- `repos.pull`; and
+- typed configuration/content writes: `stacks.config.patch`,
+  `stacks.compose.write`, `stacks.environment.write`, `stacks.commands.write`,
+  and `stacks.file.write`; and
+- typed webhook writes: `stacks.webhook.update` (enabled and force-deploy flags)
+  and `stacks.webhook.secret.write` (custom secret).
+
+Search output is locally filtered, sorted, and capped at 50 items.
+Resource pages never advertise an offset beyond 10000. `truncated: true` means
+matching items remain beyond that supported range; narrow the query. Each
+request fetches the bounded upstream inventory before local filtering, so an
+upstream body larger than two MiB still fails rather than silently truncating.
+`operations.search` page indices are capped at 100. Searches return `nextOffset` for
+remaining matches within the same page; follow it before `nextPage`, then reset
+offset to zero when changing pages. Page contents can change as new operations
+arrive, so these cursors are not snapshot guarantees. `operations.status`
+resolves one operation by its stable id rather than a moving page (its former
+`page` argument is accepted but ignored for one release). `stacks.diagnostics`
+returns bounded operational signals — state, Docker status text, missing Compose
+file paths, and per-service image and update flags, each list capped at 250
+entries — and is classified sensitive so its results are labeled accordingly.
+The governed sensitive reads return bounded configuration, Compose, environment,
+command, log, and webhook-secret content labeled sensitive; a stack that inherits
+its webhook secret reports `source: "inherited"` with `valueAvailable: false` and
+never fetches the shared value. `stacks.logs.tail` accepts 1-5000 lines and up to
+50 named services. Upstream response bodies are streamed into a two-mebibyte
+maximum before deserialization. Only allowlisted fields are represented in Rust,
+so unrequested upstream fields are discarded before they can reach MCP output.
+
+The typed configuration and content writes send only the fields they set through
+Komodo's partial `UpdateStack` (or `WriteStackFileContents`) — no read-modify-
+write and no arbitrary JSON — validate their complete bounded input before the
+upstream call, and are never retried. They return the target, the applied field
+names, and any reconciliation id, never the submitted contents or secret. Writes
+that accept paths, content, or the webhook secret classify their input sensitive
+and are `critical` (content, command, and secret writes) or `high` (structural
+config patches) in the gateway catalog; `stacks.webhook.update` toggles only
+flags, so its input is operational and its risk `high`. Komodo may retain a
+submitted payload in its own traces; that is disclosed at the approval boundary
+while MCP and gateway storage remain payload-free.
+
+Generic create/update/delete is absent. Governed configuration changes use
+narrow partial-update tools rather than read-modify-write over full resource
+objects. Sensitive values may be model-visible when a caller explicitly invokes
+an authorized sensitive capability, but they must not be copied into MCP or
+gateway logs, errors, metrics, approval records, or audit payloads. Komodo may
+independently retain values submitted through its API; such tools must disclose
+that upstream behavior. See [the decisions](../DECISIONS.md) and the contracts below.
+
 ## Read contract
 
 Ordinary status tools expose only resource ids, names, normalized state,

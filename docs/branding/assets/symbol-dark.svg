@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img"><title>mcp-komodo-rs</title><g transform="translate(0 0) scale(1.0)"><ns0:g xmlns:ns0="http://www.w3.org/2000/svg" fill="#F7F5F0">
+    <ns0:path d="M30 16H106Q112 16 112 22Q112 42 92 42H44Q24 42 24 22Q24 16 30 16Z" />
+    <ns0:path d="M18 36Q24 36 24 42V52Q24 58 30 58H80V80H32Q12 80 12 60V42Q12 36 18 36Z" />
+    <ns0:path d="M18 86Q24 86 24 92V98Q24 102 30 102H106Q112 102 112 108Q112 122 96 122H32Q12 122 12 102V92Q12 86 18 86Z" />
+  </ns0:g>
+  <ns0:circle xmlns:ns0="http://www.w3.org/2000/svg" cx="104" cy="70" r="14" fill="none" stroke="#B66A45" stroke-width="10" />
+</g></svg>
