@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>Stack symbol</title>
+  <g fill="currentColor">
+    <path d="M30 16H106Q112 16 112 22Q112 42 92 42H44Q24 42 24 22Q24 16 30 16Z"/>
+    <path d="M18 36Q24 36 24 42V52Q24 58 30 58H80V80H32Q12 80 12 60V42Q12 36 18 36Z"/>
+    <path d="M18 86Q24 86 24 92V98Q24 102 30 102H106Q112 102 112 108Q112 122 96 122H32Q12 122 12 102V92Q12 86 18 86Z"/>
+  </g>
+  <circle cx="104" cy="70" r="14" fill="none" stroke="var(--connection, currentColor)" stroke-width="10"/>
+</svg>

@@ -1,5 +1,17 @@
 # Architecture
 
+## Components and access profiles
+
+- `komodo-api` owns bounded HTTP transport and allowlisted upstream models.
+- `komodo-mcp` owns schemas, validation, dispatch, annotations, and the tool registry.
+- `komodo-server` owns process configuration, credentials, ingress authentication,
+  stdio and Streamable HTTP, health checks, and catalog emission.
+
+Local `--stdio` dispatches only ordinary status tools using read credentials.
+The launcher controls access to the process and its environment; no HTTP listener
+or gateway identity is used. Sensitive and mutating tools are rejected even if
+called directly by name. The HTTP profile follows the request path below.
+
 ## Request path
 
 The MCP gateway authenticates the caller, applies Cedar authorization, mints a

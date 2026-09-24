@@ -71,6 +71,20 @@ This proves the protocol path without touching a live Komodo installation. It
 does not certify a particular third-party client's configuration UI or a newer
 Core version. See [compatibility](compatibility.md).
 
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| The client cannot start the server | Use the absolute binary path and `--stdio`; check that the build completed and the file is executable. |
+| The server exits at startup | Confirm the child process receives all three required variables. A variable in a shell is not automatically present in a separately launched desktop client. |
+| `system.status` fails | Check Core reachability from the client process, the Core base URL, and the service user's read permissions. Never include credential values in a report. |
+| A tool is missing | Local stdio intentionally excludes writes and sensitive reads. Use the gateway profile for those tools. |
+| Search finds no matching resources | Check the search text and the resources visible to the read identity. A successful connection does not grant access to every resource. |
+
+To stop, disconnect or disable the server in your MCP client; closing its input
+ends the child process. The protocol test starts and cleans up its own fake
+upstream and does not create resources in Komodo.
+
 ## Limits and failures
 
 Input uses newline-delimited JSON with at most 64 KiB per frame, including its

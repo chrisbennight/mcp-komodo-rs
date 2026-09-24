@@ -1,182 +1,132 @@
 # mcp-komodo-rs
 
-`mcp-komodo-rs` connects MCP clients to Komodo through typed, bounded tools.
-Use it to inspect stacks, deployments, builds, and operations, or to perform
-explicitly authorized deployment and configuration changes.
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/branding/assets/wordmark-dark.svg">
+  <source media="(max-width: 600px)" srcset="docs/branding/assets/wordmark-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/branding/assets/header-dark.svg">
+  <img src="docs/branding/assets/header-light.svg" width="960" alt="mcp-komodo-rs — Komodo operations for MCP clients">
+</picture>
 
-The repository is named `mcp-komodo-rs`; the executable remains
-`komodo-mcp-rs` for compatibility. Start with the
-[local status-only quickstart](docs/quickstart.md) for a stdio MCP client without
-a gateway or administrative credentials. The HTTP profile described below
-provides the full governed tool surface through a gateway.
+**Inspect Komodo stacks, deployments, and builds from your MCP client.**
 
-Local stdio provides ordinary status tools using read credentials. The HTTP
-gateway profile adds deployment actions and sensitive configuration, Compose,
-environment, log, and secret tools. Those capabilities require separate policy
-and approval controls; the local profile does not advertise or dispatch them.
+Connect an AI assistant to [Komodo](https://komo.do/) through named tools for
+status, deployment operations, and configuration changes. Start locally with
+read-only status access. Add a gateway when you need authorization and approval
+controls for operations that change resources or expose sensitive content.
+MCP (Model Context Protocol) lets a client discover and call these tools.
 
-The server will not expose a raw Komodo proxy, arbitrary JSON or actions,
-Docker inspection, Periphery configuration, terminal or shell access, or
-unbounded upstream data. Those interfaces cannot be governed with the same
-precision as named typed operations.
+**[Get started](#get-started)** · **[Documentation](docs/README.md)** ·
+**[Contribute](CONTRIBUTING.md)** · **[Get help](SUPPORT.md)**
 
-## Authorization model
+## Things to try
 
-Every `/mcp` request requires both the private rotating gateway bearer and a
-gateway-signed `X-MCP-Identity` JWT. The JWT is verified against bounded JWKS
-data with pinned issuer, `aud = komodo`, and
-the configured gateway actor in `act.sub`.
+**Find a stack and check its state.** Use `stacks.search` to find resources, then
+`stacks.status` to inspect one by name or ID. The local profile also includes
+status tools for servers, deployments, builds, repositories, and operations.
+[Connect a local client](docs/quickstart.md).
 
-The gateway is the policy authority. Standard MCP hints plus the experimental
-action-metadata and result trust-annotation namespaces describe behavior and
-result handling as claims; they do not grant access:
+**Deploy a change and follow the result.** With the gateway profile and the
+required authorization, call `stacks.deploy`, then use the operation receipt to
+check progress. An interrupted write may already have reached Komodo;
+[reconcile its outcome](docs/reconciliation.md) before trying again.
 
-- authenticated users may invoke low-risk, read-only status tools;
-- every side-effecting tool requires membership in `komodo-admin`; and
-- a Cedar forbid rule prevents other groups, including broad MCP
-  administrators, from bypassing that requirement.
+**Inspect configuration or logs when needed.** The gateway profile offers
+separate tools for Compose, environment, logs, and selected configuration
+changes. These can disclose sensitive data and need their own access and
+approval policy. [See the tool reference](docs/tool-surface.md).
 
-The HTTP profile uses two distinct Komodo service-user credentials. Read tools
-can only use the read identity; mutation tools can only use the narrowly
-privileged administrative identity. Your secret provider supplies credentials
-and gateway bearers through the process environment at startup. Infisical is
-one option, not a runtime requirement.
+## Get started
 
-## Tool surface
+You need Linux, Git, a C compiler/linker, Rust installed through rustup, and an
+MCP client that can launch a stdio server. To inspect your resources, you also
+need a reachable Komodo Core installation and read-only service-user credentials.
+The tested contract is Core 2.1.2; other versions need compatibility checks.
+This is an early project with no supported stable release line yet.
 
-Read-only tools:
+```sh
+git clone https://github.com/chrisbennight/mcp-komodo-rs.git
+cd mcp-komodo-rs
+cargo build --release --locked -p komodo-server
+```
 
-- `system.status`;
-- `servers.search` and `servers.status`;
-- `stacks.search`, `stacks.status`, and `stacks.diagnostics`;
-- `deployments.search` and `deployments.status`;
-- `builds.search` and `builds.status`;
-- `repos.search` and `repos.status`; and
-- `operations.search` and `operations.status`.
+Repository access is required while publication is being prepared. The checked-in
+toolchain selects Rust; the first build downloads public dependencies. The
+executable is `target/release/komodo-mcp-rs` (the binary name differs from the
+repository name).
 
-Governed reads over stack configuration and content (content-bearing results
-are labeled sensitive and untrusted; `stacks.webhook.status` returns only
-metadata and is not sensitive):
+Add a stdio server to your client's configuration, replacing the path:
 
-- `stacks.config.read` — configuration shape and presence flags, no raw payloads;
-- `stacks.compose.read` — Compose contents for a configured, latest, or deployed source;
-- `stacks.environment.read` and `stacks.commands.read`;
-- `stacks.webhook.secret.read`;
-- `stacks.logs.tail` and `operations.logs.read`; and
-- `stacks.webhook.status` — enabled, force-deploy, and secret-source metadata only.
+```json
+{
+  "mcpServers": {
+    "komodo-status": {
+      "command": "/absolute/path/to/mcp-komodo-rs/target/release/komodo-mcp-rs",
+      "args": ["--stdio"]
+    }
+  }
+}
+```
 
-Administrative tools:
+Supply these environment variables to the child process through your client's
+secret settings or launcher:
 
-- `stacks.deploy`, `stacks.restart`, and `stacks.stop`;
-- `deployments.deploy` and `deployments.restart`;
-- `builds.run` and `builds.cancel`;
-- `repos.pull`; and
-- typed configuration/content writes: `stacks.config.patch`,
-  `stacks.compose.write`, `stacks.environment.write`, `stacks.commands.write`,
-  and `stacks.file.write`; and
-- typed webhook writes: `stacks.webhook.update` (enabled and force-deploy flags)
-  and `stacks.webhook.secret.write` (custom secret).
-
-Search output is locally filtered, sorted, and capped at 50 items.
-Resource pages never advertise an offset beyond 10000. `truncated: true` means
-matching items remain beyond that supported range; narrow the query. Each
-request fetches the bounded upstream inventory before local filtering, so an
-upstream body larger than two MiB still fails rather than silently truncating.
-`operations.search` page indices are capped at 100. Searches return `nextOffset` for
-remaining matches within the same page; follow it before `nextPage`, then reset
-offset to zero when changing pages. Page contents can change as new operations
-arrive, so these cursors are not snapshot guarantees. `operations.status`
-resolves one operation by its stable id rather than a moving page (its former
-`page` argument is accepted but ignored for one release). `stacks.diagnostics`
-returns bounded operational signals — state, Docker status text, missing Compose
-file paths, and per-service image and update flags, each list capped at 250
-entries — and is classified sensitive so its results are labeled accordingly.
-The governed sensitive reads return bounded configuration, Compose, environment,
-command, log, and webhook-secret content labeled sensitive; a stack that inherits
-its webhook secret reports `source: "inherited"` with `valueAvailable: false` and
-never fetches the shared value. `stacks.logs.tail` accepts 1-5000 lines and up to
-50 named services. Upstream response bodies are streamed into a two-mebibyte
-maximum before deserialization. Only allowlisted fields are represented in Rust,
-so unrequested upstream fields are discarded before they can reach MCP output.
-
-The typed configuration and content writes send only the fields they set through
-Komodo's partial `UpdateStack` (or `WriteStackFileContents`) — no read-modify-
-write and no arbitrary JSON — validate their complete bounded input before the
-upstream call, and are never retried. They return the target, the applied field
-names, and any reconciliation id, never the submitted contents or secret. Writes
-that accept paths, content, or the webhook secret classify their input sensitive
-and are `critical` (content, command, and secret writes) or `high` (structural
-config patches) in the gateway catalog; `stacks.webhook.update` toggles only
-flags, so its input is operational and its risk `high`. Komodo may retain a
-submitted payload in its own traces; that is disclosed at the approval boundary
-while MCP and gateway storage remain payload-free.
-
-Generic create/update/delete is absent. Governed configuration changes use
-narrow partial-update tools rather than read-modify-write over full resource
-objects. Sensitive values may be model-visible when a caller explicitly invokes
-an authorized sensitive capability, but they must not be copied into MCP or
-gateway logs, errors, metrics, approval records, or audit payloads. Komodo may
-independently retain values submitted through its API; such tools must disclose
-that upstream behavior. See [the decisions](DECISIONS.md) and
-[tool contract](docs/tool-surface.md).
-
-## Configuration
-
-The local profile needs only the read key, read secret, and a Core URL reachable
-from the client process. For the full HTTP gateway profile, provide:
-
-| Variable | Purpose |
+| Variable | Value to supply |
 | --- | --- |
-| `KOMODO_MCP_READ_API_KEY` | Read-only Komodo service-user key |
-| `KOMODO_MCP_READ_API_SECRET` | Read-only Komodo service-user secret |
-| `KOMODO_MCP_ADMIN_API_KEY` | Narrow administrative Komodo key |
-| `KOMODO_MCP_ADMIN_API_SECRET` | Narrow administrative Komodo secret |
-| `KOMODO_MCP_GATEWAY_BEARER_CURRENT` | Current private gateway bearer |
-| `KOMODO_MCP_IDENTITY_JWKS_URL` | Gateway Ed25519 JWKS endpoint |
-| `KOMODO_MCP_IDENTITY_ISSUER` | Exact gateway identity-token issuer |
-| `KOMODO_MCP_IDENTITY_ACTOR` | Exact gateway identity-token actor subject |
+| `KOMODO_MCP_UPSTREAM_URL` | Your Core base URL, such as `https://komodo.example.com/` |
+| `KOMODO_MCP_READ_API_KEY` | A read-only service-user API key |
+| `KOMODO_MCP_READ_API_SECRET` | That key's secret |
 
-See the [complete configuration reference](docs/configuration.md) for every
-setting, default, and bound, and [gateway setup](docs/gateway-setup.md) for the
-deployment contract. [`.env.example`](.env.example) contains placeholders;
-the server does not load dotenv files automatically.
+The server does not load `.env` files itself. Keep credentials out of command
+arguments and committed configuration. Client configuration locations and secret
+interfaces vary; see the [full quickstart](docs/quickstart.md).
 
-For a source build and contribution workflow, see
-[CONTRIBUTING.md](CONTRIBUTING.md). See [SECURITY.md](SECURITY.md) before reporting
-a suspected vulnerability.
+Connect the client and call `system.status` with `{}`. A successful response
+includes `reachable: true` and your Core version. Then call `stacks.search` with
+`{"limit": 10}` to find a resource. Local stdio needs no gateway or administrative
+key and offers no mutations, sensitive configuration, diagnostics, or log reads.
 
-## Development
-
-Export a standard MCP `tools/list` catalog without runtime credentials:
+Without a Komodo installation, you can still check the protocol using the real
+binary and a loopback fake Core:
 
 ```sh
-cargo run --locked -p komodo-server -- --emit-tools-json
+cargo test --locked -p komodo-server --test stdio
 ```
 
-This JSON contains the full supported surface and annotations. Import it using
-your gateway's own policy procedure; metadata does not grant authority. Local
-stdio `tools/list` advertises only the status profile. The existing gateway
-manifest remains an optional integration scaffold.
+This checks initialization, discovery, status calls, and rejection of unavailable
+operations. It does not connect to a live deployment. See
+[troubleshooting](docs/quickstart.md#troubleshooting) if your client cannot connect.
 
-Rust 1.96 is pinned. Required local gates are:
+## Choose an access profile
 
-```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --all-features --locked
-cargo doc --workspace --no-deps --locked
-python3 scripts/check_docs.py
-python3 -m unittest discover -s scripts/tests
-```
+| Profile | What it provides | What it needs |
+| --- | --- | --- |
+| Local stdio | Ordinary status and search tools | A local process launcher and read credentials |
+| Gateway HTTP | Status, deployment actions, and governed configuration, log, and secret tools | Separate read/admin credentials and a gateway implementing the identity, authorization, and approval contract |
 
-The gateway manifest is generated from the same registry as MCP `tools/list`:
+The HTTP endpoint requires a rotating gateway bearer and a verified identity JWT
+on every MCP request. A Komodo API key alone cannot authenticate an ordinary
+client to it. The gateway owns per-user policy and approvals; tool annotations
+do not grant access. [Configure the gateway profile](docs/gateway-setup.md).
 
-```sh
-cargo run --locked -p komodo-server -- --emit-gateway-manifest
-```
+The server exposes typed, bounded operations. It does not provide a raw Komodo
+API proxy, arbitrary shell access, or Docker inspection. Authorized sensitive
+reads can return sensitive content to the caller. Komodo may retain submitted
+write content in its own traces; see the [tool contract](docs/tool-surface.md)
+for the disclosure and failure semantics.
 
-The implementation contract targets Komodo 2.1.2. Compatibility references
-are recorded in [the compatibility document](docs/compatibility.md). Deployment
-configuration and secret-provider references belong in the operator's deployment
-repository, not this source repository. See [builds and releases](docs/releases.md)
-for GitHub checks, image publication, and the remaining release prerequisites.
+## Go further
+
+The [documentation guide](docs/README.md) covers configuration, operation
+recovery, compatibility, and the architecture. The supported container target is
+Linux amd64; [builds and releases](docs/releases.md) explains image availability,
+publication, and evidence. Other platforms and standalone release binaries are
+not currently published.
+
+[Get help or report a bug](SUPPORT.md) · [Contribute](CONTRIBUTING.md) ·
+[Report a vulnerability](SECURITY.md) · [License](LICENSE)
+
+## License
+
+[MIT](LICENSE). The original project artwork uses the same license. The bundled
+Manrope font retains its [SIL Open Font License](docs/branding/fonts/OFL.txt).
+Rust dependency notices are described in [notice provenance](licenses/README.md).
