@@ -33,7 +33,7 @@ pub fn gateway_manifest() -> String {
         output.push_str("  - name: ");
         output.push_str(policy.name);
         output.push_str("\n    risk: ");
-        output.push_str(policy.risk);
+        output.push_str(policy.risk.as_str());
         output.push('\n');
     }
     output
@@ -44,6 +44,32 @@ mod tests {
     use komodo_mcp::TOOL_REGISTRY;
 
     use super::gateway_manifest;
+
+    #[test]
+    fn manifest_uses_only_gateway_risks_and_keeps_consequential_writes_high() {
+        let manifest = gateway_manifest();
+        let risks: Vec<_> = manifest
+            .lines()
+            .filter_map(|line| line.strip_prefix("    risk: "))
+            .collect();
+        assert_eq!(risks.len(), TOOL_REGISTRY.len());
+        assert!(
+            risks
+                .iter()
+                .all(|risk| ["low", "medium", "high"].contains(risk))
+        );
+        for tool in [
+            "stacks.config.patch",
+            "stacks.compose.write",
+            "stacks.environment.write",
+            "stacks.commands.write",
+            "stacks.file.write",
+            "stacks.webhook.update",
+            "stacks.webhook.secret.write",
+        ] {
+            assert!(manifest.contains(&format!("- name: {tool}\n    risk: high\n")));
+        }
+    }
 
     #[test]
     fn manifest_is_annotation_native_and_omits_legacy_classification_flags() {

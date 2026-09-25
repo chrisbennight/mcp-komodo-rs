@@ -68,9 +68,9 @@ write and no arbitrary JSON — validate their complete bounded input before the
 upstream call, and are never retried. They return the target, the applied field
 names, and any reconciliation id, never the submitted contents or secret. Writes
 that accept paths, content, or the webhook secret classify their input sensitive
-and are `critical` (content, command, and secret writes) or `high` (structural
-config patches) in the gateway catalog; `stacks.webhook.update` toggles only
-flags, so its input is operational and its risk `high`. Komodo may retain a
+and use `high`, the gateway's highest supported risk level, in the manifest
+scaffold; `stacks.webhook.update` toggles only flags, so its input is operational
+and its risk is also `high`. Komodo may retain a
 submitted payload in its own traces; that is disclosed at the approval boundary
 while MCP and gateway storage remain payload-free.
 
@@ -130,8 +130,9 @@ for later reconciliation and never echoes sensitive input.
 Annotations are assigned from each operation's behavior instead of treating
 every mutation as destructive and non-idempotent. The gateway catalog owns
 risk and authorization; every mutation continues to require `komodo-admin`.
-Sensitive and consequential writes additionally require interactive,
-argument-bound approval.
+Gateway deployment policy must enforce interactive, argument-bound approval
+for tools whose metadata requests review. Verify that effective policy before
+enabling these tools; metadata alone does not enforce approval.
 
 Mutation calls are never retried automatically. A transport failure does not
 prove that Komodo rejected the request.
@@ -155,9 +156,8 @@ one file through `WriteStackFileContents`. They never perform a full-resource
 read-modify-write cycle, send only the fields they set, validate their complete
 bounded input before the upstream call, and return the target, applied field
 names, and any reconciliation id — never the submitted contents or secret.
-Content, command, and secret writes (including the webhook secret) are
-`critical` in the gateway catalog, while structural and webhook-flag patches are
-`high`; each write's input sensitivity is declared through action-metadata, and
+Content, command, secret, structural, and webhook-flag writes use `high` in the
+gateway manifest scaffold. Each write's input sensitivity is declared through action-metadata, and
 only `stacks.file.write` labels its result sensitive because it echoes a path. Same-field concurrent updates are last-writer-wins when Komodo
 offers no revision precondition. Komodo may retain submitted configuration,
 content, commands, or secret values in its own traces or operation history;

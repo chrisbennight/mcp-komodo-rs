@@ -55,6 +55,20 @@ manifest-change preview. Configure its URL and bearer secret reference for your
 deployment, then follow your gateway's admission procedure. Do not maintain a
 separate hand-edited copy of the Rust tool classifications.
 
+The scaffold uses the gateway's `low`, `medium`, and `high` risk vocabulary.
+Consequential configuration, content, command, and secret writes use `high`,
+its highest supported level. Their sensitivity and review requirements remain
+separate behavior claims; a risk label alone is not an authorization or an
+approval policy.
+
+Before publishing, compare the complete generated tool-name set with the live
+upstream and gateway catalog. Inspect every missing tool, changed schema, and
+behavior-hash mismatch. Use the gateway preview to obtain and review current
+behavior hashes; a hash is an approval record, not a value to copy blindly to
+make a mismatch disappear. Re-preview the complete intended manifest and
+resolve quarantine findings before requesting publication approval. Preserve
+unrelated manifests and use the control plane's current revision precondition.
+
 Neither export contains an authorization or approval policy. You must configure
 that policy in the gateway. Permit ordinary status reads only for authenticated
 users, require `komodo-admin` for mutations, and separately govern sensitive
