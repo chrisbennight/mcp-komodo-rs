@@ -594,13 +594,17 @@ struct EmptyInput {}
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SearchInput {
-    /// Case-insensitive substring matched against resource name or id.
+    /// ASCII-case-insensitive substring matched against resource name or id.
+    /// At most 128 UTF-8 bytes before trimming; no control characters.
+    #[schemars(length(max = MAX_QUERY_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     query: Option<String>,
     /// Zero-based offset in the filtered, name-sorted result.
     #[serde(default)]
+    #[schemars(range(max = MAX_OFFSET))]
     offset: u16,
     /// Maximum results to return; accepted range is 1 through 50.
     #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = MAX_LIMIT))]
     limit: u16,
 }
 
@@ -612,6 +616,8 @@ const fn default_limit() -> u16 {
 #[serde(deny_unknown_fields)]
 struct SelectorInput {
     /// Exact Komodo resource name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
 }
 
@@ -632,6 +638,8 @@ enum ComposeSource {
 #[serde(deny_unknown_fields)]
 struct ComposeReadInput {
     /// Exact Komodo stack name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
     /// Which Compose revision to read; defaults to the configured contents.
     #[serde(default)]
@@ -698,12 +706,17 @@ struct CollectionReadInput {
 #[serde(deny_unknown_fields)]
 struct LogTailInput {
     /// Exact Komodo stack name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
     /// Restrict logs to these services; empty includes all services.
     #[serde(default)]
+    /// At most 50 names, each 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(max = MAX_LOG_SERVICES), inner(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$")))]
     services: Vec<String>,
     /// Number of trailing log lines to return; accepted range is 1 through 5000.
     #[serde(default = "default_log_tail")]
+    #[schemars(range(min = MIN_LOG_TAIL, max = MAX_LOG_TAIL))]
     tail: u64,
     /// Include Docker log timestamps.
     #[serde(default)]
@@ -718,6 +731,8 @@ const fn default_log_tail() -> u64 {
 #[serde(deny_unknown_fields)]
 struct OperationLogsInput {
     /// Exact operation id returned by `operations.search`.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     operation_id: String,
     /// Select a bounded stage page; individual stage text is not shortened.
     #[serde(default)]
@@ -728,18 +743,26 @@ struct OperationLogsInput {
 #[serde(deny_unknown_fields)]
 struct ConfigPatchInput {
     /// Exact Komodo stack name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
     /// Whether the stack sources its files from the host rather than the UI.
     #[serde(default)]
     files_on_host: Option<bool>,
     /// Working directory used before running Compose.
     #[serde(default)]
+    /// When supplied, 1 to 512 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_WRITE_PATH_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     run_directory: Option<String>,
     /// Configured Compose file paths, relative to the run directory.
     #[serde(default)]
+    /// At most 50 paths, each 1 to 512 UTF-8 bytes with no control characters.
+    #[schemars(length(max = MAX_WRITE_PATHS), inner(length(min = 1, max = MAX_WRITE_PATH_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$")))]
     file_paths: Option<Vec<String>>,
     /// Path of the written environment file.
     #[serde(default)]
+    /// When supplied, 1 to 512 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_WRITE_PATH_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     env_file_path: Option<String>,
 }
 
@@ -747,8 +770,12 @@ struct ConfigPatchInput {
 #[serde(deny_unknown_fields)]
 struct ComposeWriteInput {
     /// Exact Komodo stack name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
     /// New inline Compose contents.
+    /// At most 262144 UTF-8 bytes; empty text is allowed.
+    #[schemars(length(max = MAX_WRITE_CONTENT_BYTES))]
     contents: String,
 }
 
@@ -756,8 +783,12 @@ struct ComposeWriteInput {
 #[serde(deny_unknown_fields)]
 struct EnvironmentWriteInput {
     /// Exact Komodo stack name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
     /// New environment variable block; may contain secrets.
+    /// At most 262144 UTF-8 bytes; empty text is allowed.
+    #[schemars(length(max = MAX_WRITE_CONTENT_BYTES))]
     environment: String,
 }
 
@@ -766,8 +797,12 @@ struct EnvironmentWriteInput {
 struct CommandInput {
     /// Working directory for the command.
     #[serde(default)]
+    /// At most 512 UTF-8 bytes with no control characters; empty is allowed.
+    #[schemars(length(max = MAX_WRITE_PATH_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     path: String,
     /// The command to run.
+    /// At most 262144 UTF-8 bytes; empty text is allowed.
+    #[schemars(length(max = MAX_WRITE_CONTENT_BYTES))]
     command: String,
 }
 
@@ -775,6 +810,8 @@ struct CommandInput {
 #[serde(deny_unknown_fields)]
 struct CommandsWriteInput {
     /// Exact Komodo stack name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
     /// New pre-deploy command, when set.
     #[serde(default)]
@@ -788,10 +825,16 @@ struct CommandsWriteInput {
 #[serde(deny_unknown_fields)]
 struct FileWriteInput {
     /// Exact Komodo stack name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
     /// File path relative to the stack run directory, or an absolute path.
+    /// Must be 1 to 512 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_WRITE_PATH_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     file_path: String,
     /// New file contents.
+    /// At most 262144 UTF-8 bytes; empty text is allowed.
+    #[schemars(length(max = MAX_WRITE_CONTENT_BYTES))]
     contents: String,
 }
 
@@ -799,6 +842,8 @@ struct FileWriteInput {
 #[serde(deny_unknown_fields)]
 struct WebhookUpdateInput {
     /// Exact Komodo stack name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
     /// Whether inbound webhooks trigger action, when set.
     #[serde(default)]
@@ -812,8 +857,12 @@ struct WebhookUpdateInput {
 #[serde(deny_unknown_fields)]
 struct WebhookSecretWriteInput {
     /// Exact Komodo stack name or id.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
     /// New custom webhook secret value.
+    /// Must be 1 to 262144 UTF-8 bytes; empty values are rejected.
+    #[schemars(length(min = 1, max = MAX_WRITE_CONTENT_BYTES))]
     secret: String,
 }
 
@@ -822,14 +871,19 @@ struct WebhookSecretWriteInput {
 struct OperationsSearchInput {
     /// Offset within this page's filtered results; reset to zero when advancing page.
     #[serde(default)]
+    #[schemars(range(max = MAX_OFFSET))]
     offset: u16,
     /// Bounded Komodo update page; page zero is newest.
     #[serde(default)]
+    #[schemars(range(max = MAX_OPERATION_PAGE))]
     page: u32,
-    /// Case-insensitive substring matched against operation id or kind.
+    /// ASCII-case-insensitive substring matched against operation id or kind.
+    /// At most 128 UTF-8 bytes before trimming; no control characters.
+    #[schemars(length(max = MAX_QUERY_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     query: Option<String>,
     /// Maximum results to return; accepted range is 1 through 50.
     #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = MAX_LIMIT))]
     limit: u16,
 }
 
@@ -837,6 +891,8 @@ struct OperationsSearchInput {
 #[serde(deny_unknown_fields)]
 struct OperationStatusInput {
     /// Exact operation id returned by `operations.search`.
+    /// Must be 1 to 128 UTF-8 bytes with no control characters.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     operation_id: String,
     /// Deprecated and ignored: the operation is now looked up by its stable id.
     /// Retained for one release so existing callers do not break.
@@ -1456,6 +1512,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
+        validate_search(&input)?;
         let output = search(
             self.read.servers().await.map_err(api_error)?,
             &input,
@@ -1473,6 +1530,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
+        validate_selector(&input.selector)?;
         let item = select(
             self.read.servers().await.map_err(api_error)?,
             &input.selector,
@@ -1485,6 +1543,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
+        validate_search(&input)?;
         let output = search(
             self.read.stacks().await.map_err(api_error)?,
             &input,
@@ -1502,6 +1561,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
+        validate_selector(&input.selector)?;
         let item = select(
             self.read.stacks().await.map_err(api_error)?,
             &input.selector,
@@ -1562,6 +1622,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
+        validate_selector(&input.selector)?;
         let item = select(
             self.read.stacks().await.map_err(api_error)?,
             &input.selector,
@@ -1577,6 +1638,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
+        validate_selector(&input.selector)?;
         let item = select(
             self.read.stacks().await.map_err(api_error)?,
             &input.selector,
@@ -1590,6 +1652,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
+        validate_selector(&input.selector)?;
         let item = select(
             self.read.stacks().await.map_err(api_error)?,
             &input.selector,
@@ -1603,6 +1666,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
+        validate_selector(&input.selector)?;
         let item = select(
             self.read.stacks().await.map_err(api_error)?,
             &input.selector,
@@ -1639,6 +1703,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
+        validate_search(&input)?;
         let output = search(
             self.read.deployments().await.map_err(api_error)?,
             &input,
@@ -1656,6 +1721,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
+        validate_selector(&input.selector)?;
         let item = select(
             self.read.deployments().await.map_err(api_error)?,
             &input.selector,
@@ -1668,6 +1734,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
+        validate_search(&input)?;
         let output = search(
             self.read.builds().await.map_err(api_error)?,
             &input,
@@ -1685,6 +1752,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
+        validate_selector(&input.selector)?;
         let item = select(
             self.read.builds().await.map_err(api_error)?,
             &input.selector,
@@ -1697,6 +1765,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
+        validate_search(&input)?;
         let output = search(
             self.read.repos().await.map_err(api_error)?,
             &input,
@@ -1714,6 +1783,7 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
+        validate_selector(&input.selector)?;
         let item = select(self.read.repos().await.map_err(api_error)?, &input.selector)?;
         structured(normalize_repo(item))
     }
@@ -2374,14 +2444,7 @@ fn search<I, O>(
     input: &SearchInput,
     normalize: fn(ResourceListItem<I>) -> O,
 ) -> Result<SearchPage<O>, McpError> {
-    validate_limit(input.limit)?;
-    if input.offset > MAX_OFFSET {
-        return Err(McpError::invalid_params(
-            "offset must not exceed 10000",
-            None,
-        ));
-    }
-    let query = validate_query(input.query.as_deref())?;
+    let query = validate_search(input)?;
     resources.retain(|item| resource_matches(item, query.as_deref()));
     resources.sort_by(|left, right| {
         left.name
@@ -2411,6 +2474,17 @@ fn search<I, O>(
         next_offset,
         truncated: consumed < total && next_offset.is_none(),
     })
+}
+
+fn validate_search(input: &SearchInput) -> Result<Option<String>, McpError> {
+    validate_limit(input.limit)?;
+    if input.offset > MAX_OFFSET {
+        return Err(McpError::invalid_params(
+            "offset must not exceed 10000",
+            None,
+        ));
+    }
+    validate_query(input.query.as_deref())
 }
 
 fn validate_limit(limit: u16) -> Result<(), McpError> {
@@ -2444,14 +2518,16 @@ fn bounded_next_page(next_page: Option<u32>) -> Result<Option<u32>, McpError> {
 }
 
 fn validate_query(query: Option<&str>) -> Result<Option<String>, McpError> {
-    let query = query.map(str::trim).filter(|value| !value.is_empty());
     if query.is_some_and(|value| value.len() > MAX_QUERY_BYTES || has_control(value)) {
         return Err(McpError::invalid_params(
             "query must be at most 128 bytes and contain no control characters",
             None,
         ));
     }
-    Ok(query.map(str::to_ascii_lowercase))
+    Ok(query
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase))
 }
 
 fn validate_selector(selector: &str) -> Result<(), McpError> {
@@ -3117,6 +3193,8 @@ mod tests {
     struct FakeApi {
         label: &'static str,
         failure: Option<ApiError>,
+        read_failure: Option<ApiError>,
+        read_attempts: std::sync::atomic::AtomicUsize,
         attempts: Arc<std::sync::atomic::AtomicUsize>,
         /// Records each `update_stack` patch so a handler-to-client mapping can
         /// be asserted; the fake would otherwise discard the argument.
@@ -3155,13 +3233,25 @@ mod tests {
         );
     }
 
+    impl FakeApi {
+        fn before_read(&self) -> Result<(), ApiError> {
+            self.read_attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.read_failure.clone().map_or(Ok(()), Err)
+        }
+    }
+
     impl KomodoApi for FakeApi {
         fn version(&self) -> ApiFuture<'_, String> {
-            Box::pin(async move { Ok(self.label.into()) })
+            Box::pin(async move {
+                self.before_read()?;
+                Ok(self.label.into())
+            })
         }
 
         fn servers(&self) -> ApiFuture<'_, Vec<ResourceListItem<ServerInfo>>> {
-            Box::pin(async {
+            Box::pin(async move {
+                self.before_read()?;
                 Ok(vec![ResourceListItem {
                     id: "server-1".into(),
                     resource_type: "Server".into(),
@@ -3175,7 +3265,8 @@ mod tests {
         }
 
         fn stacks(&self) -> ApiFuture<'_, Vec<ResourceListItem<StackInfo>>> {
-            Box::pin(async {
+            Box::pin(async move {
+                self.before_read()?;
                 self.collection_reads
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if let Some(cancellation) = &self.cancel_on_resolution {
@@ -3226,7 +3317,8 @@ mod tests {
         }
 
         fn deployments(&self) -> ApiFuture<'_, Vec<ResourceListItem<DeploymentInfo>>> {
-            Box::pin(async {
+            Box::pin(async move {
+                self.before_read()?;
                 Ok(vec![ResourceListItem {
                     id: "deployment-1".into(),
                     resource_type: "Deployment".into(),
@@ -3240,7 +3332,8 @@ mod tests {
         }
 
         fn builds(&self) -> ApiFuture<'_, Vec<ResourceListItem<BuildInfo>>> {
-            Box::pin(async {
+            Box::pin(async move {
+                self.before_read()?;
                 Ok(vec![ResourceListItem {
                     id: "build-1".into(),
                     resource_type: "Build".into(),
@@ -3254,7 +3347,8 @@ mod tests {
         }
 
         fn repos(&self) -> ApiFuture<'_, Vec<ResourceListItem<RepoInfo>>> {
-            Box::pin(async {
+            Box::pin(async move {
+                self.before_read()?;
                 Ok(vec![ResourceListItem {
                     id: "repo-1".into(),
                     resource_type: "Repo".into(),
@@ -3270,6 +3364,7 @@ mod tests {
 
         fn operations(&self, page: u32) -> ApiFuture<'_, OperationPage> {
             Box::pin(async move {
+                self.before_read()?;
                 // The listed page never contains `operation-1`; only `update`
                 // resolves that id. A page-scanning `operations.status` would
                 // therefore fail to find it, so the stable-lookup test can only
@@ -3309,6 +3404,7 @@ mod tests {
 
         fn update<'a>(&'a self, operation_id: &'a str) -> ApiFuture<'a, OperationItem> {
             Box::pin(async move {
+                self.before_read()?;
                 if operation_id == "operation-1" {
                     Ok(OperationItem {
                         id: "operation-1".into(),
@@ -3326,6 +3422,7 @@ mod tests {
 
         fn stack_detail<'a>(&'a self, selector: &'a str) -> ApiFuture<'a, StackDetail> {
             Box::pin(async move {
+                self.before_read()?;
                 // `stack-1` carries a full config with a custom webhook secret;
                 // `stack-2` inherits its secret and defines no sensitive content.
                 if selector == "stack-1" {
@@ -3380,6 +3477,7 @@ mod tests {
             _timestamps: bool,
         ) -> ApiFuture<'a, Log> {
             Box::pin(async move {
+                self.before_read()?;
                 Ok(Log {
                     stage: "get log".into(),
                     command: "docker compose logs".into(),
@@ -3394,6 +3492,7 @@ mod tests {
 
         fn update_logs<'a>(&'a self, operation_id: &'a str) -> ApiFuture<'a, Vec<Log>> {
             Box::pin(async move {
+                self.before_read()?;
                 self.collection_reads
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if operation_id == "operation-1" {
@@ -4060,6 +4159,207 @@ mod tests {
                 "offset": 0
             })));
         assert!(handler().dispatch(&request).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn invalid_reads_fail_before_any_upstream_request_even_during_an_outage() {
+        let read = Arc::new(FakeApi {
+            read_failure: Some(ApiError::Unavailable),
+            ..FakeApi::default()
+        });
+        let handler = KomodoMcp::new(read.clone(), Arc::new(FakeApi::default()));
+        let mut cases = Vec::new();
+        for name in [
+            "servers.search",
+            "stacks.search",
+            "deployments.search",
+            "builds.search",
+            "repos.search",
+            "operations.search",
+        ] {
+            for args in [
+                json!({"limit":0}),
+                json!({"limit":51}),
+                json!({"offset":10001}),
+                json!({"query":"x".repeat(129)}),
+                json!({"query":"é".repeat(65)}),
+                json!({"query":"\tmini"}),
+                json!({"query":" ".repeat(129)}),
+            ] {
+                cases.push((name, args));
+            }
+        }
+        for name in [
+            "servers.status",
+            "stacks.status",
+            "stacks.diagnostics",
+            "stacks.config.read",
+            "stacks.compose.read",
+            "stacks.environment.read",
+            "stacks.commands.read",
+            "stacks.webhook.status",
+            "stacks.webhook.secret.read",
+            "stacks.logs.tail",
+            "deployments.status",
+            "builds.status",
+            "repos.status",
+        ] {
+            for selector in [String::new(), "bad\nselector".into(), "é".repeat(65)] {
+                cases.push((name, json!({"selector":selector})));
+            }
+        }
+        cases.extend([
+            ("operations.search", json!({"page":101})),
+            ("operations.status", json!({"operation_id":""})),
+            (
+                "operations.logs.read",
+                json!({"operation_id":"é".repeat(65)}),
+            ),
+            (
+                "stacks.logs.tail",
+                json!({"selector":"stack-1", "tail":5001}),
+            ),
+            (
+                "stacks.logs.tail",
+                json!({"selector":"stack-1", "services":vec!["api"; 51]}),
+            ),
+        ]);
+        for (name, args) in cases {
+            let request = CallToolRequestParams::new(name).with_arguments(arguments(&args));
+            let error = handler.dispatch(&request).await.expect_err("invalid input");
+            assert_eq!(
+                error.code,
+                ErrorCode::INVALID_PARAMS,
+                "{name} must report local validation"
+            );
+            assert_eq!(
+                read.read_attempts.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "{name} called upstream"
+            );
+        }
+        let valid = CallToolRequestParams::new("servers.search").with_arguments(arguments(
+            &json!({"query":"é".repeat(64), "limit":50, "offset":10000}),
+        ));
+        assert_eq!(
+            handler.dispatch(&valid).await.unwrap_err().code,
+            ErrorCode::INTERNAL_ERROR
+        );
+        assert_eq!(
+            read.read_attempts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "valid Unicode input must still reach the read capability"
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one table verifies the public input boundaries"
+    )]
+    fn published_input_schemas_describe_numeric_collection_and_text_limits() {
+        let catalog = KomodoMcp::list_tools_payload();
+        let schema = |name: &str| {
+            Value::Object(
+                (*catalog
+                    .tools
+                    .iter()
+                    .find(|tool| tool.name == name)
+                    .unwrap()
+                    .input_schema)
+                    .clone(),
+            )
+        };
+        for name in [
+            "servers.search",
+            "stacks.search",
+            "deployments.search",
+            "builds.search",
+            "repos.search",
+            "operations.search",
+        ] {
+            let input = schema(name);
+            for valid in [
+                json!({}),
+                json!({"query":null}),
+                json!({"query":"é".repeat(64),"limit":50,"offset":10000}),
+            ] {
+                assert!(validates(&input, &valid), "{name} valid boundary");
+            }
+            for invalid in [
+                json!({"limit":0}),
+                json!({"limit":51}),
+                json!({"offset":10001}),
+                json!({"query":"x".repeat(129)}),
+            ] {
+                assert!(!validates(&input, &invalid), "{name} invalid boundary");
+            }
+            assert!(
+                input["properties"]["query"]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("UTF-8 bytes")
+            );
+        }
+        assert!(validates(
+            &schema("operations.search"),
+            &json!({"page":100})
+        ));
+        assert!(!validates(
+            &schema("operations.search"),
+            &json!({"page":101})
+        ));
+        // The deprecated stable-id lookup page remains ignored, without a new bound.
+        assert!(validates(
+            &schema("operations.status"),
+            &json!({"operation_id":"id", "page":u32::MAX})
+        ));
+        for (name, valid, invalid) in [
+            (
+                "servers.status",
+                json!({"selector":"x".repeat(128)}),
+                json!({"selector":""}),
+            ),
+            (
+                "stacks.logs.tail",
+                json!({"selector":"stack", "tail":5000, "services":vec!["api"; 50]}),
+                json!({"selector":"stack", "services":vec!["api"; 51]}),
+            ),
+            (
+                "stacks.config.patch",
+                json!({"selector":"stack", "file_paths":vec!["compose.yaml"; 50]}),
+                json!({"selector":"stack", "file_paths":vec!["compose.yaml"; 51]}),
+            ),
+            (
+                "stacks.config.patch",
+                json!({"selector":"stack", "file_paths":[]}),
+                json!({"selector":"stack", "file_paths":[""]}),
+            ),
+            (
+                "stacks.file.write",
+                json!({"selector":"stack", "file_path":"x".repeat(512), "contents":""}),
+                json!({"selector":"stack", "file_path":"x".repeat(513), "contents":""}),
+            ),
+            (
+                "stacks.environment.write",
+                json!({"selector":"stack", "environment":"x".repeat(262_144)}),
+                json!({"selector":"stack", "environment":"x".repeat(262_145)}),
+            ),
+            (
+                "stacks.commands.write",
+                json!({"selector":"stack", "pre_deploy":{"command":"", "path":""}}),
+                json!({"selector":"stack", "pre_deploy":{"command":"", "path":"x".repeat(513)}}),
+            ),
+            (
+                "stacks.webhook.secret.write",
+                json!({"selector":"stack", "secret":"value"}),
+                json!({"selector":"stack", "secret":""}),
+            ),
+        ] {
+            let input = schema(name);
+            assert!(validates(&input, &valid), "{name} valid boundary");
+            assert!(!validates(&input, &invalid), "{name} invalid boundary");
+        }
     }
 
     #[tokio::test]
