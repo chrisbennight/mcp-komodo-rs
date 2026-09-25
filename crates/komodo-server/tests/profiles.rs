@@ -19,6 +19,25 @@ fn binary_exports_selected_profiles_without_runtime_credentials() {
         assert!(output.stderr.is_empty());
         let catalog: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(catalog["tools"].as_array().unwrap().len(), expected_count);
+        let contract = Command::new(env!("CARGO_BIN_EXE_komodo-mcp-rs"))
+            .env_clear()
+            .args(["--emit-gateway-contract-json", "--tool-profile", profile])
+            .output()
+            .unwrap();
+        assert!(contract.status.success());
+        assert!(contract.stderr.is_empty());
+        let contract: Value = serde_json::from_slice(&contract.stdout).unwrap();
+        assert_eq!(contract["tools"].as_array().unwrap().len(), expected_count);
+        for tool in catalog["tools"].as_array().unwrap() {
+            let name = format!("komodo.{}", tool["name"].as_str().unwrap());
+            assert!(
+                contract["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["name"] == name)
+            );
+        }
         let manifest = Command::new(env!("CARGO_BIN_EXE_komodo-mcp-rs"))
             .env_clear()
             .args(["--emit-gateway-manifest", "--tool-profile", profile])
@@ -39,6 +58,10 @@ fn binary_exports_selected_profiles_without_runtime_credentials() {
         vec!["--emit-tools-json", "--tool-profile", "unknown"],
         vec!["--stdio", "--tool-profile", "full"],
         vec!["--healthcheck", "--emit-gateway-manifest"],
+        vec!["--emit-gateway-contract-json", "--emit-tools-json"],
+        vec!["--emit-gateway-contract-json", "--stdio"],
+        vec!["--emit-gateway-contract-json", "--healthcheck"],
+        vec!["--emit-gateway-contract-json", "--emit-gateway-manifest"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_komodo-mcp-rs"))
             .env_clear()

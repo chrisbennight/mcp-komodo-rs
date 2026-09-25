@@ -50,11 +50,65 @@ pub fn gateway_manifest_for_profile(profile: ToolProfile) -> String {
     output
 }
 
+/// Export deployment expectations without connection settings or credentials.
+/// Approval policy remains gateway-owned; `requiresReview` is the source claim.
+///
+/// # Panics
+/// Panics if a published tool lacks its executable registry entry or required
+/// review metadata, indicating an inconsistent static tool definition.
+#[must_use]
+pub fn gateway_contract_for_profile(profile: ToolProfile) -> serde_json::Value {
+    let catalog = KomodoMcp::list_tools_for_profile(profile);
+    let tools: Vec<_> = catalog.tools.iter().map(|tool| {
+        let spec = TOOL_REGISTRY.iter().find(|spec| spec.name == tool.name)
+            .expect("published tool must have an executable registry entry");
+        let review = tool.meta.as_ref()
+            .and_then(|meta| meta.get("io.modelcontextprotocol/action-metadata"))
+            .and_then(|metadata| metadata.get("requiresReview"))
+            .and_then(serde_json::Value::as_bool)
+            .expect("published tool must declare its review requirement");
+        serde_json::json!({
+            "name": format!("komodo.{}", spec.name),
+            "governance": {"risk": spec.risk.as_str(), "side_effects": spec.side_effects, "pii": spec.pii},
+            "requiresReview": review
+        })
+    }).collect();
+    serde_json::json!({"sourceVersion": env!("CARGO_PKG_VERSION"), "tools": tools})
+}
+
 #[cfg(test)]
 mod tests {
     use komodo_mcp::TOOL_REGISTRY;
 
     use super::gateway_manifest;
+
+    #[test]
+    fn contract_covers_every_profile_tool_with_registry_governance() {
+        use komodo_mcp::{KomodoMcp, ToolProfile};
+        for profile in [
+            ToolProfile::Full,
+            ToolProfile::Status,
+            ToolProfile::ReadOnly,
+            ToolProfile::Operations,
+        ] {
+            let contract = super::gateway_contract_for_profile(profile);
+            let tools = contract["tools"].as_array().unwrap();
+            let catalog = KomodoMcp::list_tools_for_profile(profile);
+            assert_eq!(tools.len(), catalog.tools.len());
+            for tool in tools {
+                let name = tool["name"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix("komodo.")
+                    .unwrap();
+                let spec = TOOL_REGISTRY.iter().find(|spec| spec.name == name).unwrap();
+                assert_eq!(tool["governance"]["risk"], spec.risk.as_str());
+                assert_eq!(tool["governance"]["side_effects"], spec.side_effects);
+                assert_eq!(tool["governance"]["pii"], spec.pii);
+                assert!(tool["requiresReview"].is_boolean());
+            }
+        }
+    }
 
     #[test]
     fn manifest_uses_only_gateway_risks_and_keeps_consequential_writes_high() {

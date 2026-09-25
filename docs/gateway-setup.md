@@ -99,3 +99,36 @@ unverifiable identity token, stale timestamps, or JWKS failure. Inspect the
 configuration names and clock synchronization without logging tokens. A Komodo
 authentication/permission error after a valid MCP call concerns the upstream
 service user. A healthy process does not rule out either problem.
+
+## Validate deployed catalog coverage and classification
+
+Export expectations from the exact source image being deployed, selecting its
+configured profile. This command needs no runtime credentials:
+
+```sh
+komodo-mcp-rs --emit-gateway-contract-json --tool-profile full > source-contract.json
+```
+
+Using the gateway's authorized discovery tools, collect every Komodo tool into
+an operator-local JSON projection with a `tools` array. Each entry must contain
+its fully qualified `name` and `governance` object with `risk`, `side_effects`,
+`pii`, `requires_approval`, and `requires_approval_known`. Fetch all pages and use
+a caller entitled to discover the complete configured profile; a restricted
+caller's smaller catalog is not evidence of deployment drift. Do not include
+connection configuration, credentials, or tool arguments in this projection.
+
+```sh
+python3 scripts/check_gateway_catalog.py source-contract.json observed-catalog.json \
+  --approval-mode per_call
+```
+
+Select the deployment's actual `approval_mode` explicitly. `per_call` expects
+the source review requirement to remain an imported approval floor;
+`policy_only` records the deliberate choice to govern approvals through policy.
+The validator refuses missing or extra tools, duplicate identities, unknown
+approval classification, and risk/effect/sensitivity drift. A zero exit status
+proves only agreement of this complete projection. It does not prove execution
+authorization, caller-specific exemptions, or Cedar approval overlays. Exercise
+those separately with controlled identities and non-production targets. The
+gateway's reviewed behavior hashes continue to enforce schema and description
+drift; this projection does not replace contract review or approve anything.

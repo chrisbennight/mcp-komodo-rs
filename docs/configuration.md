@@ -133,6 +133,8 @@ Mode flags are mutually exclusive:
 - `--emit-tools-json` prints the full standard MCP `tools/list` catalog without
   loading runtime credentials. Add `--tool-profile` to inspect the selected
   capability catalog. It includes schemas and annotations.
+- `--emit-gateway-contract-json` prints source coverage and classification
+  expectations for the [deployment validator](gateway-setup.md#validate-deployed-catalog-coverage-and-classification), without runtime credentials.
 - `--emit-gateway-manifest` prints a gateway-specific connection and tool-risk
   scaffold without runtime credentials; `--tool-profile` selects the same subset
   as HTTP discovery. It contains no authorization or approval

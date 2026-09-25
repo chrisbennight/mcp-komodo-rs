@@ -36,6 +36,9 @@ struct Args {
     /// Print the full standard MCP tools/list catalog without runtime credentials.
     #[arg(long, conflicts_with_all = ["healthcheck", "emit_gateway_manifest"])]
     emit_tools_json: bool,
+    /// Print source classification expectations for deployment validation, without credentials.
+    #[arg(long, conflicts_with_all = ["stdio", "healthcheck", "emit_gateway_manifest", "emit_tools_json"])]
+    emit_gateway_contract_json: bool,
     /// HTTP/export capabilities: status, read-only, operations, or full. User authorization remains separate.
     #[arg(long, default_value = "full", conflicts_with_all = ["stdio", "healthcheck"]) ]
     tool_profile: ToolProfile,
@@ -52,6 +55,14 @@ fn main() -> Result<()> {
 
 async fn run() -> Result<()> {
     let args = Args::parse();
+    if args.emit_gateway_contract_json {
+        serde_json::to_writer(
+            std::io::stdout().lock(),
+            &komodo_server::gateway_contract_for_profile(args.tool_profile),
+        )
+        .context("write gateway contract")?;
+        return Ok(());
+    }
     if args.emit_tools_json {
         serde_json::to_writer(
             std::io::stdout().lock(),
