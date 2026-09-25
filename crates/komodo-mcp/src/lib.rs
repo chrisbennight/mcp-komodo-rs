@@ -98,12 +98,32 @@ enum ToolKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolSpec {
     pub name: &'static str,
-    pub risk: &'static str,
+    pub risk: GatewayRisk,
     pub side_effects: bool,
     pub pii: bool,
     behavior: ToolBehavior,
     description: &'static str,
     kind: ToolKind,
+}
+
+/// Risk vocabulary accepted by the gateway manifest contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayRisk {
+    Low,
+    Medium,
+    High,
+}
+
+impl GatewayRisk {
+    /// Serialize the gateway's risk label without admitting unsupported values.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,7 +386,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .destructive()
             .requires_review()
             .input_sensitive(),
-        "high",
+        GatewayRisk::High,
     ),
     config_write_spec(
         ToolKind::StacksComposeWrite,
@@ -376,7 +396,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .destructive()
             .requires_review()
             .input_sensitive(),
-        "critical",
+        GatewayRisk::High,
     ),
     config_write_spec(
         ToolKind::StacksEnvironmentWrite,
@@ -386,7 +406,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .destructive()
             .requires_review()
             .input_sensitive(),
-        "critical",
+        GatewayRisk::High,
     ),
     config_write_spec(
         ToolKind::StacksCommandsWrite,
@@ -396,7 +416,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .destructive()
             .requires_review()
             .input_sensitive(),
-        "critical",
+        GatewayRisk::High,
     ),
     config_write_spec(
         ToolKind::StacksFileWrite,
@@ -407,14 +427,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .requires_review()
             .input_sensitive()
             .result_sensitive(),
-        "critical",
+        GatewayRisk::High,
     ),
     config_write_spec(
         ToolKind::StacksWebhookUpdate,
         "stacks.webhook.update",
         "Set one stack's webhook enabled and force-deploy flags with a typed partial update. Requires komodo-admin, never retried; returns applied field names, not the secret.",
         ToolBehavior::mutation().destructive().requires_review(),
-        "high",
+        GatewayRisk::High,
     ),
     config_write_spec(
         ToolKind::StacksWebhookSecretWrite,
@@ -424,14 +444,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
             .destructive()
             .requires_review()
             .input_sensitive(),
-        "critical",
+        GatewayRisk::High,
     ),
 ];
 
 const fn read_spec(kind: ToolKind, name: &'static str, description: &'static str) -> ToolSpec {
     ToolSpec {
         name,
-        risk: "low",
+        risk: GatewayRisk::Low,
         side_effects: false,
         pii: false,
         behavior: ToolBehavior::read(),
@@ -450,7 +470,7 @@ const fn sensitive_read_spec(
 ) -> ToolSpec {
     ToolSpec {
         name,
-        risk: "low",
+        risk: GatewayRisk::Low,
         side_effects: false,
         pii: true,
         behavior: ToolBehavior::read().result_sensitive(),
@@ -467,7 +487,7 @@ const fn write_spec(
 ) -> ToolSpec {
     ToolSpec {
         name,
-        risk: "low",
+        risk: GatewayRisk::Low,
         side_effects: true,
         pii: false,
         behavior,
@@ -477,15 +497,15 @@ const fn write_spec(
 }
 
 /// A typed configuration or content write. Risk is gateway-owned deployment
-/// policy; content, command, and secret writes are `critical`, structural
-/// config patches `high`. The `pii` compatibility flag mirrors the write's
+/// policy; consequential configuration writes use its highest level, `high`.
+/// The `pii` compatibility flag mirrors the write's
 /// declared input sensitivity.
 const fn config_write_spec(
     kind: ToolKind,
     name: &'static str,
     description: &'static str,
     behavior: ToolBehavior,
-    risk: &'static str,
+    risk: GatewayRisk,
 ) -> ToolSpec {
     ToolSpec {
         name,
@@ -4409,8 +4429,7 @@ mod tests {
         let webhook_update = spec("stacks.webhook.update");
         assert!(!webhook_update.pii, "flag toggles are not secret input");
         assert!(!webhook_update.behavior.input_sensitive);
-        // Content/command/secret writes are critical; structural and webhook-flag
-        // patches are high because they change shape rather than content.
+        // Consequential writes use the gateway's highest supported risk level.
         for name in [
             "stacks.compose.write",
             "stacks.environment.write",
@@ -4418,10 +4437,10 @@ mod tests {
             "stacks.file.write",
             "stacks.webhook.secret.write",
         ] {
-            assert_eq!(spec(name).risk, "critical", "{name} risk");
+            assert_eq!(spec(name).risk.as_str(), "high", "{name} risk");
         }
-        assert_eq!(spec("stacks.config.patch").risk, "high");
-        assert_eq!(spec("stacks.webhook.update").risk, "high");
+        assert_eq!(spec("stacks.config.patch").risk.as_str(), "high");
+        assert_eq!(spec("stacks.webhook.update").risk.as_str(), "high");
         // Only file.write echoes an operator-sensitive path value, so only it
         // labels its result sensitive; the others return field names.
         assert!(spec("stacks.file.write").behavior.result_sensitive);
