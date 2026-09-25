@@ -18,9 +18,8 @@ cargo build --workspace --locked
 cargo run --locked -p komodo-server -- --help
 ```
 
-The repository is private during preparation, so cloning currently requires
-access. Cargo uses public dependencies; no lab registry is needed. Run these
-checks before submitting a pull request:
+Cargo uses public dependencies; no lab registry is needed. Run these checks
+before submitting a pull request:
 
 ```sh
 cargo fmt --all -- --check

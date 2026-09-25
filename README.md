@@ -49,10 +49,9 @@ cd mcp-komodo-rs
 cargo build --release --locked -p komodo-server
 ```
 
-Repository access is required while publication is being prepared. The checked-in
-toolchain selects Rust; the first build downloads public dependencies. The
-executable is `target/release/komodo-mcp-rs` (the binary name differs from the
-repository name).
+The checked-in toolchain selects Rust; the first build downloads public
+dependencies. The executable is `target/release/komodo-mcp-rs` (the binary name
+differs from the repository name).
 
 Add a stdio server to your client's configuration, replacing the path:
 

@@ -26,8 +26,9 @@ require one. Do not put credentials in a mirror URL or Docker build argument.
 In `chrisbennight/mcp-komodo-rs`, pushes to `main` and version tags run the
 source checks, build the image, and smoke it before publishing to
 `ghcr.io/chrisbennight/mcp-komodo-rs`. The publication job alone has
-`packages: write`; its registry login receives the job's `GITHUB_TOKEN` through
-stdin. Pull requests, forks, and manual validation runs do not publish.
+`packages: write`, `id-token: write`, and `attestations: write`; its registry login
+receives the job's `GITHUB_TOKEN` through stdin. Pull requests, forks, and manual
+validation runs do not publish.
 
 | Source | Image tags |
 | --- | --- |
@@ -84,12 +85,32 @@ image configuration digest, and report hashes. It is unsigned build evidence,
 not a signed provenance attestation or proof that a local image was built from
 that checkout. On CI the reviewed workflow binds the sequence: build, smoke,
 scan, then publish. The image configuration digest is not the registry manifest
-digest used for pulls. Archive release evidence durably before retention expires.
+digest used for pulls. Publication resolves each pushed tag through Docker Buildx,
+reads the resulting immutable manifest, and checks that its configuration digest
+matches the tested local image. Different tag digests or an unexpected image fail
+verification without repeating a push. A verification failure can follow a
+successful push; inspect the registry before rerunning the workflow.
 
-[GitHub artifact attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
-require Enterprise Cloud for private repositories. Signed provenance remains
-pending entitlement verification or an explicitly approved public-release path;
-this workflow does not publish private source metadata to a transparency log.
+The publication job uses the pinned official `actions/attest` action to sign
+provenance for that verified registry digest, plus a separate attestation of the
+image OS inventory. GitHub stores these attestations in its API. This repository
+is public and qualifies under current GitHub plans; signatures use public
+Sigstore infrastructure and expose build identity metadata. Private/internal
+repositories require Enterprise Cloud. See [GitHub's attestation contract](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations).
+
+The action does not push signatures to GHCR or create organization storage
+records. It retains the signed bundles for independent verification. After
+downloading dependency notices from the same workflow's test job, the publication
+job assembles `release-evidence.zip` and its SHA-256 checksum. The bundle contains
+the original scan reports, Rust notices and index, signed provenance/SBOM bundles,
+and a release record binding their hashes to the source commit and immutable
+image reference. Packaging rejects mismatched source, scan, notice, or attestation
+subject data. Its subject check is not cryptographic signature verification.
+
+`release-evidence-<source SHA>` is retained in Actions for 90 days. Attach that
+bundle and checksum to the durable version release before advertising it.
+Provenance signatures describe the build; they do not certify absence of
+vulnerabilities or make the source lockfile inventory a list of linked crates.
 
 ## Repository setup and publication prerequisites
 
@@ -106,9 +127,9 @@ malware heuristics or replace maintainer review.
 The [initial review record](security-review.md) records the preparation
 snapshot's license assessment and individual container-finding dispositions.
 
-Repository visibility and GHCR package visibility are separate settings. Keep
-both private during preparation. Before advertising a public image, deliberately
-publish the package and verify that a user with no registry credentials can
+Repository visibility and GHCR package visibility are separate settings. The
+source repository is public; this does not prove public image access. Before
+advertising a public image, verify that a user with no registry credentials can
 pull the documented digest. Complete the source/dependency review, security
 reporting setup and runnable onboarding instructions before a public release.
 
@@ -121,10 +142,17 @@ the supported Linux container target and available access profiles accurately;
 do not imply untested operating systems or clients are supported.
 
 After the tag workflow succeeds, record the registry manifest digest and exact
-source commit in the release notes. Download both the image-evidence and
-dependency-notices artifacts for that workflow, verify the notice checksum with
-`sha256sum -c dependency-notices.sha256`, and attach the files to the durable
-GitHub release record before advertising it. Actions retention is temporary.
-Retain the full OS report and review base-image distribution obligations in
-addition to the Rust notice archive. The unsigned build record is supporting
-evidence; it is not a signed registry-digest attestation.
+source commit in the release notes. Download `release-evidence-<source SHA>`,
+verify `sha256sum -c release-evidence.sha256`, and attach its archive and checksum
+to the durable GitHub release record before advertising it. Actions retention is
+temporary. Use the official verifier against the immutable image reference:
+
+```sh
+gh attestation verify oci://ghcr.io/chrisbennight/mcp-komodo-rs@sha256:<manifest-digest> \
+  --repo chrisbennight/mcp-komodo-rs
+```
+
+The retained Sigstore bundles also support [offline verification](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline).
+Review the full OS report and base-image distribution obligations in addition
+to Rust notices. Actual publication and signature verification must succeed for
+the selected release; merging workflow source alone does not establish that.
