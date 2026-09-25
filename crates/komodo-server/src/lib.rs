@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod diagnostics;
 pub mod server;
 pub mod stdio;
 

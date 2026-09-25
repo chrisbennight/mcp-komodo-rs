@@ -21,6 +21,20 @@ async fn reply(reader: &mut BufReader<tokio::process::ChildStdout>) -> Value {
 
 #[tokio::test]
 async fn actual_binary_initializes_lists_and_calls_status_without_gateway_or_admin_secrets() {
+    for filter in [
+        "off",
+        "error",
+        "warn",
+        "info",
+        "debug",
+        "trace",
+        "rmcp=trace",
+    ] {
+        stdio_status_with_log_filter(filter).await;
+    }
+}
+
+async fn stdio_status_with_log_filter(filter: &str) {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/read"))
@@ -34,6 +48,8 @@ async fn actual_binary_initializes_lists_and_calls_status_without_gateway_or_adm
         .env("KOMODO_MCP_READ_API_KEY", "synthetic-read-key")
         .env("KOMODO_MCP_READ_API_SECRET", "synthetic-read-secret")
         .env("KOMODO_MCP_UPSTREAM_URL", upstream.uri())
+        .env("KOMODO_MCP_LOG_LEVEL", filter)
+        .env("RUST_LOG", "trace")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -103,6 +119,8 @@ async fn invalid_initialize_never_echoes_peer_data_in_errors() {
         .env_clear()
         .env("KOMODO_MCP_READ_API_KEY", "synthetic-key")
         .env("KOMODO_MCP_READ_API_SECRET", "synthetic-secret")
+        .env("KOMODO_MCP_LOG_LEVEL", "trace")
+        .env("RUST_LOG", "trace")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

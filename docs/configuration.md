@@ -62,13 +62,20 @@ The example placeholders are not credentials to deploy.
 | `KOMODO_MCP_REQUEST_TIMEOUT_SECONDS` | `30` | Integer, 1–120 seconds |
 | `KOMODO_MCP_MAX_CONCURRENT_REQUESTS` | `32` | Integer, 1–256 |
 | `KOMODO_MCP_MAX_BODY_BYTES` | `1048576` | Integer, 1024–4194304 bytes |
-| `KOMODO_MCP_LOG_LEVEL` | `info` | Valid tracing EnvFilter expression; keep production logging at `info` or stricter |
+| `KOMODO_MCP_LOG_LEVEL` | `info` | Tracing EnvFilter expression restricted to the `komodo_server::diagnostics` target; cannot enable dependency logs or protocol payloads |
 
 Host and Origin lists are trimmed, lowercased, and empty entries removed. Host
 matching is case-insensitive; incoming Origin is compared exactly to the
 normalized list. List values are not wildcards. Optional numeric values use
 their defaults when absent or blank. Most ordinary string settings are trimmed;
 credential values and the identity actor are not.
+
+HTTP diagnostics are JSON on stderr. At `info`, they report listener startup;
+`debug` and `trace` additionally report HTTP completion status and duration.
+Only the dedicated diagnostic target is eligible for output. Filter directives
+such as `rmcp=trace` cannot enable SDK messages, request URLs or headers, tool
+arguments, or upstream/result content. `off` disables diagnostics. Stdio installs
+no diagnostic subscriber and reserves stdout for protocol responses.
 
 The HTTP request deadline and upstream timeout are independent. A timeout during
 a write can leave an uncertain outcome; do not repeat the write automatically.
