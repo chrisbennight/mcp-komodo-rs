@@ -5,6 +5,14 @@ oversized response, or incompatible response. Komodo may have accepted it even
 when this server cannot return a receipt. A successful transport response also
 does not prove a queued operation has completed.
 
+An ingress deadline can instead produce HTTP 408, and shutdown can produce
+HTTP 503. If a handler returns its cancellation error first, its MCP error
+marks the outcome unknown and retry unsafe. These request-lifetime failures
+need not include a resolved target or receipt; use the original intended
+resource and the operation-specific evidence below. Cancellation stops local
+work and prevents later submission, but cannot retract a request already sent
+to Komodo.
+
 ## Receipt available
 
 Execution tools and `stacks.file.write` normally return an `operationId`.
@@ -20,8 +28,10 @@ An uncertain upstream mutation error includes `outcome: "unknown"`,
 name. It never includes submitted configuration, paths, commands or secrets.
 The error also sets `operatorVerificationRequired: true`: the suggested read
 is evidence for an operator, not an automatic authorization to retry.
-Failure while resolving a selector occurs before the write and does not carry
-this uncertain-mutation marker.
+A regular upstream lookup error while resolving a selector occurs before the
+write and does not carry this uncertain-mutation marker. A request-lifetime
+error conservatively leaves the outcome unknown because it does not establish
+which stage the request reached.
 
 | Write | Evidence to inspect when no receipt is available |
 | --- | --- |

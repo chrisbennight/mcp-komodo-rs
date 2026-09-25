@@ -77,9 +77,23 @@ such as `rmcp=trace` cannot enable SDK messages, request URLs or headers, tool
 arguments, or upstream/result content. `off` disables diagnostics. Stdio installs
 no diagnostic subscriber and reserves stdout for protocol responses.
 
-The HTTP request deadline and upstream timeout are independent. A timeout during
-a write can leave an uncertain outcome; do not repeat the write automatically.
-See [write reconciliation](reconciliation.md).
+The HTTP request deadline starts at admission, before identity verification and
+body parsing, and covers resource resolution, read retries, and tool execution.
+Each upstream attempt also has its own timeout; it cannot extend that deadline.
+The concurrency limit includes detached MCP handlers until their work ends.
+Excess requests receive HTTP 503 without an unbounded waiting queue.
+
+Expiry or a dropped HTTP request cancels local handler work. A deadline check
+immediately before administrative submission prevents a completed resolution
+read from starting a write after cancellation. Cancellation cannot undo a write
+already submitted to Komodo; even an HTTP 408 or disconnect can leave an uncertain
+outcome. Do not repeat it automatically. See [write reconciliation](reconciliation.md).
+
+HTTP mode handles SIGINT and, on Unix, SIGTERM. Shutdown stops admission, cancels
+local requests, and allows up to five seconds for HTTP connections to drain.
+`/readyz` returns HTTP 503 during shutdown; `/healthz` remains an independent
+liveness endpoint. Readiness indicates whether this process accepts work, not
+whether Komodo is healthy.
 
 ## Command-line modes
 

@@ -71,9 +71,18 @@ additional payload copies.
 
 ## Failure semantics
 
-Idempotent reads retry once only on an unavailable transport. Mutations are
-sent exactly once. An unavailable response after a mutation is an ambiguous
-outcome. When no receipt is available, the error names the stable target and
-the relevant read tool without echoing submitted values. Follow the
+HTTP admission holds a shared concurrency permit through the actual SDK handler
+lifetime. The ingress deadline and cancellation signal travel with the request;
+the administrative submission boundary checks them again after any resolution
+read. Overload is rejected, and local work stops on expiry, transport cancellation,
+or shutdown. See [request limits](configuration.md#listener-and-request-limits).
+
+Idempotent reads retry once only on an unavailable transport while the request
+lifetime permits it. Mutations are never retried. A request cancelled before
+submission sends no mutation; cancellation after submission does not roll back
+an upstream effect. An unavailable response after a mutation is an ambiguous
+outcome. An upstream mutation error names the resolved target and relevant read
+tool without echoing submitted values. Request-lifetime errors can instead lack
+a target or receipt and conservatively require reconciliation. Follow the
 [operation-specific reconciliation guide](reconciliation.md) instead of
 replaying the intent. Upstream response bodies are never returned as errors.
