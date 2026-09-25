@@ -381,7 +381,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksConfigPatch,
         "stacks.config.patch",
-        "Patch one stack's structural configuration (file mode, run directory, file paths, env-file path) with a typed partial update. Input includes operator-sensitive paths; requires komodo-admin, never retried; returns applied field names, not values.",
+        "Patch supplied structural fields (file mode, run directory, file paths, env-file path); omitted fields stay unchanged and an empty file_paths list clears the list. Does not deploy. Paths are sensitive and Komodo may retain submitted configuration. Requires komodo-admin; never retried. Returns applied field names, not values; reconcile with stacks.config.read.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -391,7 +391,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksComposeWrite,
         "stacks.compose.write",
-        "Replace one stack's inline Compose contents with a typed partial update. Input is sensitive; requires komodo-admin, never retried; returns applied field names, not the contents.",
+        "Replace the entire inline Compose text; empty contents clears it. Source mode determines whether inline content is used; this does not change mode or deploy. Input is sensitive and Komodo may retain it. Requires komodo-admin; never retried. Returns applied field names, not contents; reconcile with stacks.compose.read using source configured.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -401,7 +401,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksEnvironmentWrite,
         "stacks.environment.write",
-        "Replace one stack's environment variables with a typed partial update. Input may contain secrets and is sensitive; requires komodo-admin, never retried; returns applied field names, not values.",
+        "Replace the entire environment text, not individual variables; an empty string clears it. Updates configuration without deploying. Input may contain secrets and Komodo may retain it. Requires komodo-admin; never retried. Returns applied field names, not values; reconcile with stacks.environment.read.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -411,7 +411,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksCommandsWrite,
         "stacks.commands.write",
-        "Set one stack's pre-deploy and post-deploy commands with a typed partial update. Input is sensitive; requires komodo-admin, never retried; returns applied field names, not values.",
+        "Replace each supplied pre-deploy or post-deploy command; omitted commands stay unchanged and an empty command clears its text. Stores commands for later deployment with upstream execution privileges; does not execute or deploy now. Input is sensitive and Komodo may retain it. Requires komodo-admin; never retried. Returns applied field names, not values; reconcile with stacks.commands.read.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -421,7 +421,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksFileWrite,
         "stacks.file.write",
-        "Write one file's contents on a stack in files-on-host or repo mode. Input is sensitive; requires komodo-admin, never retried; returns the target, applied name, the operator-sensitive file path, and a reconciliation id, not the contents.",
+        "Replace one file's contents in files-on-host or repo mode; an empty string writes an empty file. Komodo owns file-path and mode enforcement. Input is sensitive and Komodo may retain it. Requires komodo-admin; never retried. Returns target, applied field, sensitive file path, and an operation id, not contents; reconcile with operations.status before further actions.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -432,14 +432,14 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksWebhookUpdate,
         "stacks.webhook.update",
-        "Set one stack's webhook enabled and force-deploy flags with a typed partial update. Requires komodo-admin, never retried; returns applied field names, not the secret.",
+        "Set supplied webhook enabled and force-deploy flags; omitted flags stay unchanged. Changes future webhook handling without deploying now. Requires komodo-admin; never retried. Returns applied field names, not the secret; reconcile with stacks.webhook.status.",
         ToolBehavior::mutation().destructive().requires_review(),
         GatewayRisk::High,
     ),
     config_write_spec(
         ToolKind::StacksWebhookSecretWrite,
         "stacks.webhook.secret.write",
-        "Set one stack's custom webhook secret with a typed partial update. Input is a secret that Komodo may retain in its own operation history; requires komodo-admin, never retried; returns the applied field name, not the value.",
+        "Replace the custom webhook secret with a nonempty value; clearing it to inherit Core's shared secret is not supported. Does not deploy. Komodo may retain the submitted secret in its own operation history. Requires komodo-admin; never retried. Returns the applied field name, not the value; reconcile with stacks.webhook.status for its source or the governed stacks.webhook.secret.read for a custom value.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -4388,6 +4388,35 @@ mod tests {
         // than any error passing.
         assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(error.message, "operation not found");
+    }
+
+    #[test]
+    fn configuration_write_discovery_discloses_retention_and_reconciliation() {
+        let catalog = KomodoMcp::list_tools_payload();
+        for (name, reconciliation) in [
+            ("stacks.config.patch", "stacks.config.read"),
+            ("stacks.compose.write", "stacks.compose.read"),
+            ("stacks.environment.write", "stacks.environment.read"),
+            ("stacks.commands.write", "stacks.commands.read"),
+            ("stacks.file.write", "operations.status"),
+            ("stacks.webhook.update", "stacks.webhook.status"),
+            ("stacks.webhook.secret.write", "stacks.webhook.secret.read"),
+        ] {
+            let tool = catalog.tools.iter().find(|tool| tool.name == name).unwrap();
+            let description = tool.description.as_deref().unwrap();
+            assert!(
+                description.contains(reconciliation),
+                "{name} reconciliation"
+            );
+            assert!(catalog.tools.iter().any(|tool| tool.name == reconciliation));
+            let spec = TOOL_REGISTRY.iter().find(|spec| spec.name == name).unwrap();
+            if spec.behavior.input_sensitive {
+                assert!(
+                    description.contains("Komodo may retain"),
+                    "{name} retention"
+                );
+            }
+        }
     }
 
     #[test]
