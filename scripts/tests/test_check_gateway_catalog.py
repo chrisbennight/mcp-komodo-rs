@@ -2,6 +2,7 @@
 import copy
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location(
@@ -12,6 +13,17 @@ spec.loader.exec_module(checker)
 
 
 class GatewayCatalogTests(unittest.TestCase):
+    def test_duplicate_json_keys_are_refused_at_every_depth(self):
+        for document in (
+            '{"tools": [], "tools": []}',
+            '{"tools": [{"governance": {"risk": "low", "risk": "high"}}]}',
+        ):
+            with self.subTest(document=document), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "catalog.json"
+                path.write_text(document)
+                with self.assertRaisesRegex(ValueError, "duplicate JSON object key"):
+                    checker.load(path)
+
     def setUp(self):
         self.source = {"tools": [{"name": "komodo.stacks.compose.write", "requiresReview": True,
             "governance": {"risk": "high", "side_effects": True, "pii": True}}]}

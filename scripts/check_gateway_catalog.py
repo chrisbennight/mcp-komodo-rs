@@ -10,12 +10,21 @@ MAX_BYTES = 4 * 1024 * 1024
 FIELDS = {"risk": str, "side_effects": bool, "pii": bool}
 
 
+def unique_object(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
 def load(path: Path) -> dict:
     with path.open("rb") as stream:
         data = stream.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise ValueError("catalog file exceeds the size bound")
-    return json.loads(data)
+    return json.loads(data, object_pairs_hook=unique_object)
 
 
 def index(document: dict, *, source: bool) -> dict:
