@@ -120,6 +120,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -139,6 +141,43 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Publish the tested image
+        id: publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/publish_image.py
+      - name: Attest the verified registry manifest
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/chrisbennight/mcp-komodo-rs
+          subject-digest: ${{ steps.publish.outputs.image_digest }}
+          push-to-registry: false
+          create-storage-record: false
+      - name: Attest the image OS inventory
+        id: sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/chrisbennight/mcp-komodo-rs
+          subject-digest: ${{ steps.publish.outputs.image_digest }}
+          sbom-path: artifacts/sbom.cdx.json
+          push-to-registry: false
+          create-storage-record: false
+      - name: Download notices from this workflow's validated test job
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dependency-notices-${{ github.sha }}
+          path: artifacts
+          digest-mismatch: error
+      - name: Assemble release evidence
+        env:
+          PUBLISHED_IMAGE_DIGEST: ${{ steps.publish.outputs.image_digest }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.sbom.outputs.bundle-path }}
+        run: python3 scripts/package_release_evidence.py
+      - name: Retain the complete release evidence bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-evidence-${{ github.sha }}
+          path: artifacts/release-evidence.*
+          if-no-files-found: error
+          retention-days: 90
