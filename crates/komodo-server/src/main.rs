@@ -1,6 +1,8 @@
 use std::{
+    future::IntoFuture,
     net::{IpAddr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -83,10 +85,21 @@ async fn run() -> Result<()> {
         .context("invalid listen address")?;
     let listener = TcpListener::bind(address).await.context("bind listener")?;
     info!(target: diagnostics::TARGET, "Komodo MCP listening");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown(cancellation))
-        .await
-        .context("serve MCP")
+    let server = axum::serve(listener, router)
+        .with_graceful_shutdown(cancellation.clone().cancelled_owned())
+        .into_future();
+    tokio::pin!(server);
+    tokio::select! {
+        result = &mut server => result.context("serve MCP"),
+        result = shutdown_signal() => {
+            cancellation.cancel();
+            result.context("receive shutdown signal")?;
+            tokio::time::timeout(Duration::from_secs(5), &mut server)
+                .await
+                .context("HTTP shutdown deadline exceeded")?
+                .context("drain MCP")
+        }
+    }
 }
 
 async fn serve_stdio() -> Result<()> {
@@ -118,9 +131,17 @@ async fn serve_stdio() -> Result<()> {
     Ok(())
 }
 
-async fn shutdown(cancellation: CancellationToken) {
-    let _ = signal::ctrl_c().await;
-    cancellation.cancel();
+async fn shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate = signal::unix::signal(signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    signal::ctrl_c().await
 }
 
 async fn healthcheck() -> Result<()> {

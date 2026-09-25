@@ -1,5 +1,7 @@
 //! MCP catalog, normalization, and dispatch for Komodo.
 
+pub mod execution;
+
 use std::{borrow::Cow, sync::Arc};
 
 use komodo_api::{
@@ -1082,6 +1084,8 @@ struct FileWriteResult {
 pub struct KomodoMcp {
     read: Arc<dyn KomodoApi>,
     admin: Option<Arc<dyn KomodoApi>>,
+    budget: Option<execution::ExecutionBudget>,
+    rpc_cancellation: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl KomodoMcp {
@@ -1091,6 +1095,8 @@ impl KomodoMcp {
         Self {
             read,
             admin: Some(admin),
+            budget: None,
+            rpc_cancellation: None,
         }
     }
 
@@ -1099,7 +1105,19 @@ impl KomodoMcp {
     /// Sensitive reads and writes are absent from discovery and rejected by dispatch.
     #[must_use]
     pub fn status_only(read: Arc<dyn KomodoApi>) -> Self {
-        Self { read, admin: None }
+        Self {
+            read,
+            admin: None,
+            budget: None,
+            rpc_cancellation: None,
+        }
+    }
+
+    /// Bind this handler clone to one transport request's lifetime.
+    #[must_use]
+    pub fn with_execution_budget(mut self, budget: execution::ExecutionBudget) -> Self {
+        self.budget = Some(budget);
+        self
     }
 
     fn permits(&self, spec: &ToolSpec) -> bool {
@@ -1122,6 +1140,18 @@ impl KomodoMcp {
     }
 
     fn admin(&self) -> Result<&dyn KomodoApi, McpError> {
+        // Resource resolution can await upstream reads. Check again at the
+        // shared submission boundary before polling any administrative call.
+        if let Some(budget) = &self.budget {
+            budget.check()?;
+        }
+        if self
+            .rpc_cancellation
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+        {
+            return Err(execution::ended());
+        }
         self.admin
             .as_deref()
             .ok_or_else(|| McpError::invalid_request("tool unavailable in status-only mode", None))
@@ -1806,9 +1836,25 @@ impl ServerHandler for KomodoMcp {
     async fn call_tool(
         &self,
         params: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        self.dispatch(&params).await
+        let mut invocation = self.clone();
+        invocation.rpc_cancellation = Some(context.ct.clone());
+        if let Some(budget) = &invocation.budget {
+            budget.check()?;
+            tokio::select! {
+                biased;
+                () = context.ct.cancelled() => Err(execution::ended()),
+                () = budget.ended() => Err(execution::ended()),
+                result = invocation.dispatch(&params) => result,
+            }
+        } else {
+            tokio::select! {
+                biased;
+                () = context.ct.cancelled() => Err(execution::ended()),
+                result = invocation.dispatch(&params) => result,
+            }
+        }
     }
 }
 
@@ -2790,6 +2836,7 @@ mod tests {
         /// Records each `update_stack` patch so a handler-to-client mapping can
         /// be asserted; the fake would otherwise discard the argument.
         recorded: std::sync::Arc<std::sync::Mutex<Vec<StackConfigPatch>>>,
+        cancel_on_resolution: Option<tokio_util::sync::CancellationToken>,
     }
 
     #[tokio::test]
@@ -2843,6 +2890,9 @@ mod tests {
 
         fn stacks(&self) -> ApiFuture<'_, Vec<ResourceListItem<StackInfo>>> {
             Box::pin(async {
+                if let Some(cancellation) = &self.cancel_on_resolution {
+                    cancellation.cancel();
+                }
                 Ok(vec![
                     ResourceListItem {
                         id: "stack-1".into(),
@@ -3152,6 +3202,42 @@ mod tests {
                 ..FakeApi::default()
             }),
         )
+    }
+
+    #[tokio::test]
+    async fn administrative_submission_rechecks_cancellation_after_resolution() {
+        for (tool, input) in [
+            ("stacks.stop", json!({"selector":"stack-1"})),
+            (
+                "stacks.environment.write",
+                json!({"selector":"stack-1","environment":"synthetic"}),
+            ),
+            (
+                "stacks.file.write",
+                json!({"selector":"stack-1","file_path":"compose.yaml","contents":"synthetic"}),
+            ),
+        ] {
+            let cancellation = tokio_util::sync::CancellationToken::new();
+            let admin = Arc::new(FakeApi::default());
+            let attempts = Arc::clone(&admin.attempts);
+            let handler = KomodoMcp::new(
+                Arc::new(FakeApi {
+                    cancel_on_resolution: Some(cancellation.clone()),
+                    ..FakeApi::default()
+                }),
+                admin,
+            )
+            .with_execution_budget(super::execution::ExecutionBudget::new(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+                cancellation,
+            ));
+            let error = handler
+                .dispatch(&CallToolRequestParams::new(tool).with_arguments(arguments(&input)))
+                .await
+                .expect_err("cancelled during resolution");
+            assert!(error.message.contains("reconcile"));
+            assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
     }
 
     fn arguments(value: &Value) -> Map<String, Value> {

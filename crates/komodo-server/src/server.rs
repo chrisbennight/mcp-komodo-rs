@@ -14,8 +14,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
-use tower::limit::ConcurrencyLimitLayer;
-use tower_http::{timeout::TimeoutLayer, trace::TraceLayer};
+use tower_http::trace::TraceLayer;
 
 use komodo_mcp::KomodoMcp;
 
@@ -23,6 +22,7 @@ use crate::{
     auth::{IdentityVerifier, IngressAuth, require_gateway},
     config::Settings,
     diagnostics,
+    lifecycle::{RequestLimits, ScopedMcp, admit},
 };
 
 #[derive(Debug, Serialize)]
@@ -51,7 +51,7 @@ pub fn build_router(
     let allowed_hosts = settings.allowed_hosts.clone();
     let allowed_origins = settings.allowed_origins.clone();
     let service = StreamableHttpService::new(
-        move || Ok(handler.clone()),
+        move || Ok(ScopedMcp(handler.clone())),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default()
             .with_cancellation_token(cancellation.child_token())
@@ -68,14 +68,18 @@ pub fn build_router(
             enforce_body_limit,
         ))
         .layer(middleware::from_fn_with_state(auth, require_gateway))
-        .layer(ConcurrencyLimitLayer::new(settings.max_concurrent_requests))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            settings.request_timeout,
+        .layer(middleware::from_fn_with_state(
+            RequestLimits::new(
+                settings.max_concurrent_requests,
+                settings.request_timeout,
+                cancellation.clone(),
+            ),
+            admit,
         ));
 
     Ok(Router::new()
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz).with_state(cancellation.clone()))
         .merge(mcp)
         .layer(
             TraceLayer::new_for_http()
@@ -113,6 +117,18 @@ async fn healthz() -> impl IntoResponse {
         }),
     )
 }
+
+async fn readyz(State(cancellation): State<CancellationToken>) -> StatusCode {
+    if cancellation.is_cancelled() {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    }
+}
+
+#[cfg(test)]
+#[path = "server_lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {
@@ -220,7 +236,7 @@ mod tests {
         }
     }
 
-    fn settings() -> Settings {
+    pub(super) fn settings() -> Settings {
         Settings {
             host: "127.0.0.1".into(),
             port: 8000,

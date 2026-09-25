@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod config;
 pub mod diagnostics;
+mod lifecycle;
 pub mod server;
 pub mod stdio;
 
