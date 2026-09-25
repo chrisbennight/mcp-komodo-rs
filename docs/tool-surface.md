@@ -52,8 +52,8 @@ arrive, so these cursors are not snapshot guarantees. `operations.status`
 resolves one operation by its stable id rather than a moving page (its former
 `page` argument is accepted but ignored for one release). `stacks.diagnostics`
 returns bounded operational signals — state, Docker status text, missing Compose
-file paths, and per-service image and update flags, each list capped at 250
-entries — and is classified sensitive so its results are labeled accordingly.
+file paths, and per-service image and update flags, each returned page capped at
+250 entries — and is classified sensitive so its results are labeled accordingly.
 The governed sensitive reads return bounded configuration, Compose, environment,
 command, log, and webhook-secret content labeled sensitive; a stack that inherits
 its webhook secret reports `source: "inherited"` with `valueAvailable: false` and
@@ -98,7 +98,11 @@ ambiguity.
 `operations.search` returns a bounded page of Komodo's update list, while
 `operations.status` resolves one operation by its stable id through Komodo
 `GetUpdate` (its former `page` argument is accepted but ignored for one
-release). Both return id, operation kind, start timestamp, success, and status.
+release). Both return id, operation kind, start timestamp, raw status, explicit
+`outcome`, nullable `success`, and a typed resource target when available.
+Accepted/running/unknown operations have `success: null`; only completed
+operations report true or false. A target identifies a resource, not the caller
+that submitted an operation. See [reconciliation](reconciliation.md).
 `stacks.diagnostics` is a sensitive read that adds Docker status text, missing
 Compose file paths, per-service image and update signals, and deploy-vs-latest
 drift. Ordinary status responses continue to omit logs, commands, stdout,
@@ -117,8 +121,36 @@ returns a custom secret value; a stack that inherits Komodo Core's shared secret
 instead reports `source: "inherited"` with `valueAvailable: false` and no value,
 and the shared secret is never fetched. `stacks.logs.tail` tails container logs
 (1-5000 lines, up to 50 named services) and `operations.logs.read` returns an
-operation's per-stage command logs. Per-file and per-record lists are bounded,
+operation's per-stage command logs. Per-file and per-record pages are bounded,
 and every content-bearing read labels its result `sensitive` and `untrusted`.
+
+### Collection completeness and continuation
+
+`stacks.diagnostics`, `stacks.config.read`, `stacks.compose.read`, and
+`operations.logs.read` accept `window: {"offset":0,"limit":250}`. Both fields
+are optional within the optional window: offset defaults to zero and limit to
+250. Limits are 1–250 records and offsets 0–2097152. Invalid windows are rejected
+before any upstream read. Omission retains the first-page behavior.
+
+Each collection has adjacent page metadata: `servicesPage`, `missingFilesPage`,
+`filePathsPage`, `filesPage`, or `logsPage`. It reports `available`, `returned`,
+`totalObserved`, `truncated`, and `nextOffset`. Follow each collection's next
+offset in a later request; a diagnostics window applies independently to its
+service and missing-file lists. `truncated` means some observed records are
+outside the current page, including earlier records. A final continuation page
+can therefore have `truncated: true` and `nextOffset: null`.
+
+Unavailable latest/deployed Compose contents report `available: false` and
+`totalObserved: null`. Available empty contents report true and zero instead.
+An empty configured inline source is an available empty collection. These values
+describe Core's response, not whether files exist on a host. Continuations fetch
+fresh bounded responses and do not provide a stable snapshot. Concurrent changes
+can shift offsets; reconcile important results against resource/operation IDs.
+
+Pagination does not shorten an individual file or log stage. Log-stage record
+limits differ from the line count accepted by `stacks.logs.tail`. The upstream
+two-MiB response limit still applies before local pagination; an oversized source
+fails explicitly and is never presented as a complete page.
 
 ## Mutation contract
 

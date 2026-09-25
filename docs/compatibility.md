@@ -12,6 +12,14 @@ fields, and write responses that echo submitted configuration are discarded
 entirely. New upstream fields therefore do not automatically expand the MCP
 information surface.
 
+Operation search and status preserve only the resource target's type and id
+from Core's tagged `ResourceTarget`; unknown fields remain excluded. Core 2.1.2
+reports `Queued`, `InProgress`, and `Complete` update states. The MCP `outcome`
+distinguishes pending from completed results, and `success` is now nullable until
+completion. Consumers that assumed a boolean for pending operations must use
+the explicit outcome. An unrecognized state or target does not establish success
+or caller-level correlation. See [write reconciliation](reconciliation.md).
+
 Stack stop uses the pinned upstream
 [`StopStack` request](https://github.com/moghtech/komodo/blob/20b9d16d4bbab934c6274477c68b032bae4b61b9/client/core/rs/src/api/execute/stack.rs)
 with `stack` set to the resolved resource id, `services: []` to stop all

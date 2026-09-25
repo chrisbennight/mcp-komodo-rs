@@ -170,6 +170,17 @@ pub struct OperationItem {
     pub start_ts: i64,
     pub success: bool,
     pub status: String,
+    /// Resource metadata only; no operator identity or configuration snapshot.
+    #[serde(default)]
+    pub target: Option<OperationTarget>,
+}
+
+/// Allowlisted resource correlation carried by Komodo update lists and details.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct OperationTarget {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -773,6 +784,7 @@ mod tests {
                 "success": true,
                 "status": "Complete",
                 "logs": [{ "stdout": "SENTINEL_SECRET" }],
+                "target": {"type":"Stack", "id":"stack-1", "configuration":"SENTINEL_TARGET"},
                 "current_toml": "SENTINEL_CONFIG"
             })))
             .expect(1)
@@ -837,6 +849,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "_id": { "$oid": "op-42" },
                 "operation": "DeployStack",
+                "target": {"type":"Stack", "id":"stack-1", "configuration":"SENTINEL_TARGET"},
                 "start_ts": 99,
                 "success": true,
                 "status": "Complete",
@@ -853,6 +866,9 @@ mod tests {
         assert_eq!(operation.operation, "DeployStack");
         assert!(operation.success);
         assert_eq!(operation.status, "Complete");
+        let target = operation.target.as_ref().expect("resource target");
+        assert_eq!(target.kind, "Stack");
+        assert_eq!(target.id, "stack-1");
         assert!(!format!("{operation:?}").contains("SENTINEL"));
     }
 
