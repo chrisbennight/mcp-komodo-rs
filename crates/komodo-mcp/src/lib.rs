@@ -39,9 +39,9 @@ const MAX_OFFSET: u16 = 10_000;
 const MAX_OPERATION_PAGE: u32 = 100;
 /// Upper bound on per-service and missing-file entries returned by diagnostics,
 /// keeping a single stack's normalized diagnostic response bounded.
-const MAX_DIAGNOSTIC_ITEMS: usize = 250;
 /// Maximum Compose files and operation-log records returned by a single read.
-const MAX_CONTENT_ITEMS: usize = 250;
+const MAX_CONTENT_ITEMS: u16 = 250;
+const MAX_COLLECTION_OFFSET: u32 = 2_097_152;
 /// Maximum byte length accepted for a single written content or command field.
 const MAX_WRITE_CONTENT_BYTES: usize = 256 * 1024;
 /// Maximum entries accepted in a written Compose-file-path list.
@@ -636,6 +636,62 @@ struct ComposeReadInput {
     /// Which Compose revision to read; defaults to the configured contents.
     #[serde(default)]
     source: ComposeSource,
+    /// Select a bounded file page from the current upstream response.
+    #[serde(default)]
+    window: CollectionWindow,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+struct CollectionWindow {
+    /// Offset within the current response; later requests are not snapshots.
+    #[serde(default)]
+    #[schemars(range(max = 2_097_152))]
+    offset: u32,
+    /// Maximum records per collection, from 1 through 250; defaults to 250.
+    #[serde(default = "default_content_limit")]
+    #[schemars(range(min = 1, max = 250))]
+    limit: u16,
+}
+
+const fn default_content_limit() -> u16 {
+    MAX_CONTENT_ITEMS
+}
+
+impl Default for CollectionWindow {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            limit: MAX_CONTENT_ITEMS,
+        }
+    }
+}
+
+impl CollectionWindow {
+    fn validate(self) -> Result<(), McpError> {
+        if self.offset > MAX_COLLECTION_OFFSET || self.limit == 0 || self.limit > MAX_CONTENT_ITEMS
+        {
+            return Err(McpError::invalid_params(
+                "collection window is outside its supported range",
+                None,
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CollectionReadInput {
+    /// Exact Komodo stack name or id, 1 to 128 UTF-8 bytes without controls.
+    #[schemars(
+        length(min = 1, max = 128),
+        regex(pattern = r"^[^\u0000-\u001F\u007F-\u009F]*$")
+    )]
+    selector: String,
+    /// Apply this page independently to each returned collection.
+    #[serde(default)]
+    window: CollectionWindow,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -663,6 +719,9 @@ const fn default_log_tail() -> u64 {
 struct OperationLogsInput {
     /// Exact operation id returned by `operations.search`.
     operation_id: String,
+    /// Select a bounded stage page; individual stage text is not shortened.
+    #[serde(default)]
+    window: CollectionWindow,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -888,10 +947,33 @@ struct OperationStatus {
     operation: String,
     /// Unix timestamp in milliseconds when the operation began.
     start_ts: i64,
-    /// Whether the operation currently reports success.
-    success: bool,
+    /// Completed success/failure; null until the operation is known complete.
+    success: Option<bool>,
     /// Normalized queued, in-progress, or complete state.
     status: String,
+    /// Accepted, running, succeeded, failed, or unknown; never infer failure while running.
+    outcome: OperationOutcome,
+    /// Resource correlation reported by Core; null if unavailable or unsupported.
+    target: Option<OperationTargetView>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum OperationOutcome {
+    Accepted,
+    Running,
+    Succeeded,
+    Failed,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct OperationTargetView {
+    /// Komodo resource type, such as Stack or Deployment.
+    kind: String,
+    /// Stable resource id; this is not a per-caller request id.
+    id: String,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -915,11 +997,51 @@ struct StackDiagnostics {
     project_missing: bool,
     /// Expected Compose or additional files absent from the stack's source.
     missing_files: Vec<String>,
+    /// Completeness of the missing-file collection in this response.
+    missing_files_page: CollectionPage,
     /// Whether the deployed commit matches the latest available commit, when
     /// both are known; null for stacks without repository hashes.
     up_to_date: Option<bool>,
     /// Bounded per-service image and update signals.
     services: Vec<ServiceDiagnostic>,
+    /// Completeness of the service collection in this response.
+    services_page: CollectionPage,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CollectionPage {
+    /// Whether the requested collection was available, distinct from an empty list.
+    available: bool,
+    /// Number of records in this returned page.
+    returned: usize,
+    /// Number observed in the bounded upstream response, or null when unavailable.
+    total_observed: Option<usize>,
+    /// Some observed records are outside this page, including earlier records.
+    truncated: bool,
+    /// Next offset in this collection, or null when there are no later records.
+    next_offset: Option<usize>,
+}
+
+fn collection_page<T>(items: Option<Vec<T>>, window: CollectionWindow) -> (Vec<T>, CollectionPage) {
+    let available = items.is_some();
+    let items = items.unwrap_or_default();
+    let total = items.len();
+    let offset = usize::try_from(window.offset).expect("supported collection offset fits usize");
+    let end = offset.saturating_add(usize::from(window.limit)).min(total);
+    let items: Vec<_> = items
+        .into_iter()
+        .skip(offset)
+        .take(usize::from(window.limit))
+        .collect();
+    let page = CollectionPage {
+        available,
+        returned: items.len(),
+        total_observed: available.then_some(total),
+        truncated: items.len() < total,
+        next_offset: (end < total).then_some(end),
+    };
+    (items, page)
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -948,6 +1070,8 @@ struct StackConfigView {
     run_directory: String,
     /// Configured Compose file paths, relative to the run directory.
     file_paths: Vec<String>,
+    /// Completeness of the configured file-path collection.
+    file_paths_page: CollectionPage,
     /// Path of the written environment file.
     env_file_path: String,
     /// Whether inbound webhooks trigger action for this stack.
@@ -982,6 +1106,8 @@ struct ComposeView {
     source: String,
     /// Bounded Compose files for the requested source.
     files: Vec<ComposeFileView>,
+    /// Source availability and completeness of this file page.
+    files_page: CollectionPage,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -1068,6 +1194,8 @@ struct LogRecordView {
 struct OperationLogsView {
     /// Bounded per-stage command logs for the operation.
     logs: Vec<LogRecordView>,
+    /// Completeness of this stage page; a later failure may require another page.
+    logs_page: CollectionPage,
 }
 
 macro_rules! search_output {
@@ -1115,10 +1243,12 @@ struct MutationOutput {
     target: String,
     /// Unix timestamp in milliseconds when Komodo accepted the operation.
     start_ts: i64,
-    /// Initial success signal returned by Komodo.
-    success: bool,
+    /// Completed success/failure; null for accepted, running, or unknown outcomes.
+    success: Option<bool>,
     /// Initial queued, in-progress, or complete state.
     status: String,
+    /// Explicit operation lifecycle outcome.
+    outcome: OperationOutcome,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -1144,6 +1274,8 @@ struct FileWriteResult {
     operation_id: String,
     /// Initial queued, in-progress, or complete state.
     status: String,
+    /// Explicit operation lifecycle outcome; an operation id alone is not completion.
+    outcome: OperationOutcome,
 }
 
 /// MCP handler with separate read-only and administrative upstream identities.
@@ -1381,25 +1513,33 @@ impl KomodoMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<SelectorInput>(params)?;
+        let input = parse::<CollectionReadInput>(params)?;
+        validate_selector(&input.selector)?;
+        input.window.validate()?;
         let item = select(
             self.read.stacks().await.map_err(api_error)?,
             &input.selector,
         )?;
-        structured(normalize_stack_diagnostics(item))
+        structured(normalize_stack_diagnostics(item, input.window))
     }
 
     async fn stack_config_read(
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<SelectorInput>(params)?;
+        let input = parse::<CollectionReadInput>(params)?;
+        validate_selector(&input.selector)?;
+        input.window.validate()?;
         let item = select(
             self.read.stacks().await.map_err(api_error)?,
             &input.selector,
         )?;
         let detail = self.read.stack_detail(&item.id).await.map_err(api_error)?;
-        structured(normalize_stack_config(item.name, detail.config))
+        structured(normalize_stack_config(
+            item.name,
+            detail.config,
+            input.window,
+        ))
     }
 
     async fn stack_compose_read(
@@ -1407,12 +1547,14 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<ComposeReadInput>(params)?;
+        validate_selector(&input.selector)?;
+        input.window.validate()?;
         let item = select(
             self.read.stacks().await.map_err(api_error)?,
             &input.selector,
         )?;
         let detail = self.read.stack_detail(&item.id).await.map_err(api_error)?;
-        structured(normalize_compose(input.source, detail))
+        structured(normalize_compose(input.source, detail, input.window))
     }
 
     async fn stack_environment_read(
@@ -1641,13 +1783,14 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<OperationLogsInput>(params)?;
+        input.window.validate()?;
         validate_selector(&input.operation_id)?;
         let logs = self
             .read
             .update_logs(&input.operation_id)
             .await
             .map_err(operation_lookup_error)?;
-        structured(normalize_operation_logs(logs))
+        structured(normalize_operation_logs(logs, input.window))
     }
 
     async fn mutate(
@@ -1837,6 +1980,7 @@ impl KomodoMcp {
             applied: vec!["file".to_owned()],
             file_path: input.file_path,
             operation_id: receipt.operation_id,
+            outcome: operation_outcome(&receipt.status, receipt.success).0,
             status: receipt.status,
         })
     }
@@ -1960,8 +2104,8 @@ impl ToolSpec {
             ToolKind::ServersStatus => tool::<SelectorInput, ServerStatus>(self),
             ToolKind::StacksSearch => tool::<SearchInput, StackSearchOutput>(self),
             ToolKind::StacksStatus => tool::<SelectorInput, StackStatus>(self),
-            ToolKind::StacksDiagnostics => tool::<SelectorInput, StackDiagnostics>(self),
-            ToolKind::StacksConfigRead => tool::<SelectorInput, StackConfigView>(self),
+            ToolKind::StacksDiagnostics => tool::<CollectionReadInput, StackDiagnostics>(self),
+            ToolKind::StacksConfigRead => tool::<CollectionReadInput, StackConfigView>(self),
             ToolKind::StacksComposeRead => tool::<ComposeReadInput, ComposeView>(self),
             ToolKind::StacksEnvironmentRead => tool::<SelectorInput, EnvironmentView>(self),
             ToolKind::StacksCommandsRead => tool::<SelectorInput, CommandsView>(self),
@@ -2463,7 +2607,10 @@ fn normalize_stack(item: ResourceListItem<StackInfo>) -> StackStatus {
     }
 }
 
-fn normalize_stack_diagnostics(item: ResourceListItem<StackInfo>) -> StackDiagnostics {
+fn normalize_stack_diagnostics(
+    item: ResourceListItem<StackInfo>,
+    window: CollectionWindow,
+) -> StackDiagnostics {
     let info = item.info;
     let service_count = info.services.len();
     let services_with_updates = count_service_updates(&info.services);
@@ -2472,12 +2619,10 @@ fn normalize_stack_diagnostics(item: ResourceListItem<StackInfo>) -> StackDiagno
         (Some(deployed), Some(latest)) => Some(deployed == latest),
         _ => None,
     };
-    let mut missing_files = info.missing_files;
-    missing_files.truncate(MAX_DIAGNOSTIC_ITEMS);
-    let services = info
-        .services
+    let (missing_files, missing_files_page) = collection_page(Some(info.missing_files), window);
+    let (services, services_page) = collection_page(Some(info.services), window);
+    let services = services
         .into_iter()
-        .take(MAX_DIAGNOSTIC_ITEMS)
         .map(|service| ServiceDiagnostic {
             service: service.service,
             image: service.image,
@@ -2494,8 +2639,10 @@ fn normalize_stack_diagnostics(item: ResourceListItem<StackInfo>) -> StackDiagno
         services_with_updates,
         project_missing: info.project_missing,
         missing_files,
+        missing_files_page,
         up_to_date,
         services,
+        services_page,
     }
 }
 
@@ -2515,14 +2662,18 @@ fn compose_source_label(source: ComposeSource) -> &'static str {
     }
 }
 
-fn normalize_stack_config(name: String, config: StackConfigDetail) -> StackConfigView {
-    let mut file_paths = config.file_paths;
-    file_paths.truncate(MAX_CONTENT_ITEMS);
+fn normalize_stack_config(
+    name: String,
+    config: StackConfigDetail,
+    window: CollectionWindow,
+) -> StackConfigView {
+    let (file_paths, file_paths_page) = collection_page(Some(config.file_paths), window);
     StackConfigView {
         name,
         files_on_host: config.files_on_host,
         run_directory: config.run_directory,
         file_paths,
+        file_paths_page,
         env_file_path: config.env_file_path,
         webhook_enabled: config.webhook_enabled,
         webhook_force_deploy: config.webhook_force_deploy,
@@ -2534,11 +2685,9 @@ fn normalize_stack_config(name: String, config: StackConfigDetail) -> StackConfi
     }
 }
 
-fn compose_files(contents: Option<Vec<ComposeFile>>) -> Vec<ComposeFileView> {
+fn compose_files(contents: Vec<ComposeFile>) -> Vec<ComposeFileView> {
     contents
-        .unwrap_or_default()
         .into_iter()
-        .take(MAX_CONTENT_ITEMS)
         .map(|file| ComposeFileView {
             path: file.path,
             contents: file.contents,
@@ -2546,11 +2695,15 @@ fn compose_files(contents: Option<Vec<ComposeFile>>) -> Vec<ComposeFileView> {
         .collect()
 }
 
-fn normalize_compose(source: ComposeSource, detail: StackDetail) -> ComposeView {
+fn normalize_compose(
+    source: ComposeSource,
+    detail: StackDetail,
+    window: CollectionWindow,
+) -> ComposeView {
     let files = match source {
         ComposeSource::Configured => {
             if detail.config.file_contents.is_empty() {
-                Vec::new()
+                Some(Vec::new())
             } else {
                 let path = detail
                     .config
@@ -2558,18 +2711,20 @@ fn normalize_compose(source: ComposeSource, detail: StackDetail) -> ComposeView 
                     .into_iter()
                     .next()
                     .unwrap_or_else(|| "compose.yaml".to_owned());
-                vec![ComposeFileView {
+                Some(vec![ComposeFile {
                     path,
                     contents: detail.config.file_contents,
-                }]
+                }])
             }
         }
-        ComposeSource::Deployed => compose_files(detail.info.deployed_contents),
-        ComposeSource::Latest => compose_files(detail.info.remote_contents),
+        ComposeSource::Deployed => detail.info.deployed_contents,
+        ComposeSource::Latest => detail.info.remote_contents,
     };
+    let (files, files_page) = collection_page(files, window);
     ComposeView {
         source: compose_source_label(source).into(),
-        files,
+        files: compose_files(files),
+        files_page,
     }
 }
 
@@ -2613,11 +2768,12 @@ fn normalize_webhook_secret(secret: String) -> WebhookSecretView {
     }
 }
 
-fn normalize_operation_logs(logs: Vec<Log>) -> OperationLogsView {
+fn normalize_operation_logs(logs: Vec<Log>, window: CollectionWindow) -> OperationLogsView {
+    let (logs, logs_page) = collection_page(Some(logs), window);
     OperationLogsView {
+        logs_page,
         logs: logs
             .into_iter()
-            .take(MAX_CONTENT_ITEMS)
             .map(|log| LogRecordView {
                 stage: log.stage,
                 command: log.command,
@@ -2680,23 +2836,58 @@ fn normalize_repo(item: ResourceListItem<RepoInfo>) -> RepoStatus {
 }
 
 fn normalize_operation(item: OperationItem) -> OperationStatus {
+    let (outcome, success) = operation_outcome(&item.status, item.success);
     OperationStatus {
         id: item.id,
         operation: item.operation,
         start_ts: item.start_ts,
-        success: item.success,
+        success,
         status: item.status,
+        outcome,
+        target: item.target.and_then(|target| {
+            (matches!(
+                target.kind.as_str(),
+                "System"
+                    | "Swarm"
+                    | "Server"
+                    | "Stack"
+                    | "Deployment"
+                    | "Build"
+                    | "Repo"
+                    | "Procedure"
+                    | "Action"
+                    | "Builder"
+                    | "Alerter"
+                    | "ResourceSync"
+            ) && !target.id.is_empty())
+            .then_some(OperationTargetView {
+                kind: target.kind,
+                id: target.id,
+            })
+        }),
+    }
+}
+
+fn operation_outcome(status: &str, success: bool) -> (OperationOutcome, Option<bool>) {
+    match status {
+        "Queued" => (OperationOutcome::Accepted, None),
+        "InProgress" => (OperationOutcome::Running, None),
+        "Complete" if success => (OperationOutcome::Succeeded, Some(true)),
+        "Complete" => (OperationOutcome::Failed, Some(false)),
+        _ => (OperationOutcome::Unknown, None),
     }
 }
 
 fn normalize_receipt(receipt: MutationReceipt, target: String) -> MutationOutput {
+    let (outcome, success) = operation_outcome(&receipt.status, receipt.success);
     MutationOutput {
         operation_id: receipt.operation_id,
         operation: receipt.operation,
         target,
         start_ts: receipt.start_ts,
-        success: receipt.success,
+        success,
         status: receipt.status,
+        outcome,
     }
 }
 
@@ -2931,6 +3122,7 @@ mod tests {
         /// be asserted; the fake would otherwise discard the argument.
         recorded: std::sync::Arc<std::sync::Mutex<Vec<StackConfigPatch>>>,
         cancel_on_resolution: Option<tokio_util::sync::CancellationToken>,
+        collection_reads: std::sync::atomic::AtomicUsize,
     }
 
     #[tokio::test]
@@ -2984,6 +3176,8 @@ mod tests {
 
         fn stacks(&self) -> ApiFuture<'_, Vec<ResourceListItem<StackInfo>>> {
             Box::pin(async {
+                self.collection_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if let Some(cancellation) = &self.cancel_on_resolution {
                     cancellation.cancel();
                 }
@@ -3086,6 +3280,7 @@ mod tests {
                             .map(|id| OperationItem {
                                 id: format!("page-operation-{id}"),
                                 operation: "DeployStack".into(),
+                                target: None,
                                 start_ts: 14,
                                 success: true,
                                 status: "Complete".into(),
@@ -3098,6 +3293,7 @@ mod tests {
                     operations: vec![OperationItem {
                         id: "listed-operation".into(),
                         operation: "DeployStack".into(),
+                        target: None,
                         start_ts: 14,
                         success: true,
                         status: "Complete".into(),
@@ -3117,6 +3313,7 @@ mod tests {
                     Ok(OperationItem {
                         id: "operation-1".into(),
                         operation: "DeployStack".into(),
+                        target: None,
                         start_ts: 14,
                         success: true,
                         status: "Complete".into(),
@@ -3197,6 +3394,8 @@ mod tests {
 
         fn update_logs<'a>(&'a self, operation_id: &'a str) -> ApiFuture<'a, Vec<Log>> {
             Box::pin(async move {
+                self.collection_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if operation_id == "operation-1" {
                     Ok(vec![Log {
                         stage: "deploy".into(),
@@ -4421,6 +4620,7 @@ mod tests {
         let operation = OperationItem {
             id: "operation-ABC".into(),
             operation: "DeployStack".into(),
+            target: None,
             start_ts: 1,
             success: true,
             status: "Complete".into(),
@@ -4429,6 +4629,57 @@ mod tests {
         assert!(operation_matches(&operation, Some("operation-abc")));
         assert!(operation_matches(&operation, Some("deploystack")));
         assert!(!operation_matches(&operation, Some("restart")));
+    }
+
+    #[test]
+    fn operation_outcomes_do_not_treat_pending_success_flags_as_completed_failures() {
+        for (status, success, expected, completed_success) in [
+            ("Queued", false, "accepted", json!(null)),
+            ("InProgress", false, "running", json!(null)),
+            ("Complete", true, "succeeded", json!(true)),
+            ("Complete", false, "failed", json!(false)),
+            ("unrecognized", false, "unknown", json!(null)),
+        ] {
+            let item = OperationItem {
+                id: "operation".into(),
+                operation: "DeployStack".into(),
+                start_ts: 1,
+                success,
+                status: status.into(),
+                target: None,
+            };
+            let output = serde_json::to_value(super::normalize_operation(item)).unwrap();
+            assert_eq!(output["outcome"], expected);
+            assert_eq!(output["success"], completed_success);
+            assert!(output["target"].is_null());
+            let receipt = MutationReceipt {
+                operation_id: "operation".into(),
+                operation: "DeployStack".into(),
+                start_ts: 1,
+                success,
+                status: status.into(),
+            };
+            let output =
+                serde_json::to_value(super::normalize_receipt(receipt, "stack".into())).unwrap();
+            assert_eq!(output["outcome"], expected);
+            assert_eq!(output["success"], completed_success);
+        }
+    }
+
+    #[test]
+    fn same_kind_operations_keep_distinct_resource_targets_without_extra_metadata() {
+        for (id, target) in [("operation-a", "stack-a"), ("operation-b", "stack-b")] {
+            let item: OperationItem =
+                serde_json::from_value(json!({"id":id,"operation":"DeployStack",
+                "start_ts":1,"success":false,"status":"InProgress",
+                "target":{"type":"Stack","id":target,"secret":"SENTINEL_TARGET"},
+                "operator":"SENTINEL_OPERATOR","current_toml":"SENTINEL_CONFIG"}))
+                .unwrap();
+            let output = serde_json::to_value(super::normalize_operation(item)).unwrap();
+            assert_eq!(output["id"], id);
+            assert_eq!(output["target"], json!({"kind":"Stack","id":target}));
+            assert!(!output.to_string().contains("SENTINEL"));
+        }
     }
 
     #[test]
@@ -4467,19 +4718,22 @@ mod tests {
             });
             missing.push(format!("compose.{index}.yaml"));
         }
-        let diagnostics = normalize_stack_diagnostics(resource(
-            "stack-1",
-            "gateway",
-            StackInfo {
-                state: "Running".into(),
-                status: Some("running(300)".into()),
-                services,
-                project_missing: false,
-                missing_files: missing,
-                deployed_hash: Some("aaa".into()),
-                latest_hash: Some("bbb".into()),
-            },
-        ));
+        let diagnostics = normalize_stack_diagnostics(
+            resource(
+                "stack-1",
+                "gateway",
+                StackInfo {
+                    state: "Running".into(),
+                    status: Some("running(300)".into()),
+                    services,
+                    project_missing: false,
+                    missing_files: missing,
+                    deployed_hash: Some("aaa".into()),
+                    latest_hash: Some("bbb".into()),
+                },
+            ),
+            super::CollectionWindow::default(),
+        );
 
         assert_eq!(diagnostics.health, "healthy");
         assert_eq!(diagnostics.status_message.as_deref(), Some("running(300)"));
@@ -4488,28 +4742,241 @@ mod tests {
         assert_eq!(diagnostics.up_to_date, Some(false));
         assert_eq!(diagnostics.services.len(), 250, "services are bounded");
         assert_eq!(diagnostics.missing_files.len(), 250, "paths are bounded");
+        assert_eq!(diagnostics.services_page.next_offset, Some(250));
+        assert_eq!(diagnostics.missing_files_page.total_observed, Some(300));
+        assert!(diagnostics.missing_files_page.truncated);
         assert_eq!(diagnostics.services[0].service, "svc-0");
         assert_eq!(diagnostics.services[0].image, "example/image:0");
     }
 
     #[test]
     fn stack_diagnostics_report_unknown_drift_without_repository_hashes() {
-        let diagnostics = normalize_stack_diagnostics(resource(
-            "stack-2",
-            "edge",
-            StackInfo {
-                state: "Down".into(),
-                status: None,
-                services: vec![],
-                project_missing: true,
-                missing_files: vec![],
-                deployed_hash: None,
-                latest_hash: None,
-            },
-        ));
+        let diagnostics = normalize_stack_diagnostics(
+            resource(
+                "stack-2",
+                "edge",
+                StackInfo {
+                    state: "Down".into(),
+                    status: None,
+                    services: vec![],
+                    project_missing: true,
+                    missing_files: vec![],
+                    deployed_hash: None,
+                    latest_hash: None,
+                },
+            ),
+            super::CollectionWindow::default(),
+        );
         assert_eq!(diagnostics.health, "down");
         assert_eq!(diagnostics.up_to_date, None);
         assert!(diagnostics.services.is_empty());
+    }
+
+    #[test]
+    fn collection_pages_distinguish_empty_unavailable_and_later_records() {
+        use super::{CollectionWindow, collection_page};
+        for count in [0, 1, 249, 250, 251] {
+            let (items, page) = collection_page(
+                Some((0..count).collect::<Vec<_>>()),
+                CollectionWindow::default(),
+            );
+            assert_eq!(items.len(), count.min(250));
+            assert_eq!(page.returned, items.len());
+            assert_eq!(page.total_observed, Some(count));
+            assert!(page.available);
+            assert_eq!(page.truncated, count > 250);
+            assert_eq!(page.next_offset, (count > 250).then_some(250));
+        }
+        let (_, missing) = collection_page::<String>(None, CollectionWindow::default());
+        assert!(!missing.available);
+        assert_eq!(missing.total_observed, None);
+        let (items, later) = collection_page(
+            Some((0..251).collect::<Vec<_>>()),
+            CollectionWindow {
+                offset: 250,
+                limit: 250,
+            },
+        );
+        assert_eq!(items, vec![250]);
+        assert_eq!(later.next_offset, None);
+        assert!(later.truncated, "earlier records are outside this page");
+        let (items, beyond) = collection_page(
+            Some(vec![1]),
+            CollectionWindow {
+                offset: 2_097_152,
+                limit: 250,
+            },
+        );
+        assert!(items.is_empty());
+        assert_eq!(beyond.total_observed, Some(1));
+        assert_eq!(beyond.next_offset, None);
+    }
+
+    #[test]
+    fn content_pages_reach_later_files_and_failed_log_stages_without_shortening_text() {
+        use super::{
+            CollectionWindow, ComposeSource, normalize_compose, normalize_operation_logs,
+            normalize_stack_config,
+        };
+        let next = CollectionWindow {
+            offset: 250,
+            limit: 1,
+        };
+        let paths: Vec<_> = (0..251).map(|i| format!("compose-{i}.yaml")).collect();
+        let config = normalize_stack_config(
+            "stack".into(),
+            StackConfigDetail {
+                file_paths: paths.clone(),
+                ..StackConfigDetail::default()
+            },
+            next,
+        );
+        assert_eq!(config.file_paths, vec!["compose-250.yaml"]);
+        assert_eq!(config.file_paths_page.total_observed, Some(251));
+        let contents = "多行\n".repeat(128);
+        let files = paths
+            .into_iter()
+            .map(|path| ComposeFile {
+                path,
+                contents: contents.clone(),
+            })
+            .collect();
+        let compose = normalize_compose(
+            ComposeSource::Deployed,
+            StackDetail {
+                config: StackConfigDetail::default(),
+                info: StackComposeInfo {
+                    deployed_contents: Some(files),
+                    remote_contents: None,
+                },
+            },
+            next,
+        );
+        assert_eq!(compose.files[0].path, "compose-250.yaml");
+        assert_eq!(compose.files[0].contents, contents);
+        assert_eq!(compose.files_page.total_observed, Some(251));
+        let logs = || {
+            (0..251)
+                .map(|i| Log {
+                    stage: format!("stage-{i}"),
+                    command: String::new(),
+                    stdout: String::new(),
+                    stderr: if i == 250 {
+                        "late failure".into()
+                    } else {
+                        String::new()
+                    },
+                    success: i != 250,
+                    start_ts: 1,
+                    end_ts: 2,
+                })
+                .collect()
+        };
+        let first = normalize_operation_logs(logs(), CollectionWindow::default());
+        assert_eq!(first.logs.len(), 250);
+        assert_eq!(first.logs_page.next_offset, Some(250));
+        let last = normalize_operation_logs(logs(), next);
+        assert!(!last.logs[0].success);
+        assert_eq!(last.logs[0].stderr, "late failure");
+        assert_eq!(last.logs_page.next_offset, None);
+    }
+
+    #[tokio::test]
+    async fn collection_windows_reach_handlers_and_invalid_windows_make_no_reads() {
+        let api = Arc::new(FakeApi::default());
+        let handler = KomodoMcp::new(api.clone(), api.clone());
+        for (name, key, value, collection, page) in [
+            (
+                "stacks.diagnostics",
+                "selector",
+                "stack-1",
+                "services",
+                "servicesPage",
+            ),
+            (
+                "stacks.config.read",
+                "selector",
+                "stack-1",
+                "filePaths",
+                "filePathsPage",
+            ),
+            (
+                "stacks.compose.read",
+                "selector",
+                "stack-1",
+                "files",
+                "filesPage",
+            ),
+            (
+                "operations.logs.read",
+                "operation_id",
+                "operation-1",
+                "logs",
+                "logsPage",
+            ),
+        ] {
+            for window in [
+                json!({"limit":0}),
+                json!({"limit":251}),
+                json!({"offset":2_097_153}),
+                json!({"offset":-1}),
+                json!({"unexpected":1}),
+                Value::Null,
+            ] {
+                let input = json!({key:value, "window":window});
+                let before = api
+                    .collection_reads
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let error = handler
+                    .dispatch(&CallToolRequestParams::new(name).with_arguments(arguments(&input)))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::INVALID_PARAMS, "{name}");
+                assert_eq!(
+                    api.collection_reads
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    before
+                );
+                let tool = TOOL_REGISTRY
+                    .iter()
+                    .find(|spec| spec.name == name)
+                    .unwrap()
+                    .catalog_tool();
+                assert!(!validates(
+                    &Value::Object((*tool.input_schema).clone()),
+                    &input
+                ));
+            }
+            let input = json!({key:value, "window":{"offset":1,"limit":1}});
+            let output = handler
+                .dispatch(&CallToolRequestParams::new(name).with_arguments(arguments(&input)))
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(
+                output[collection].as_array().unwrap().len(),
+                usize::from(name == "stacks.diagnostics")
+            );
+            assert_eq!(output[page]["available"], true);
+            assert_eq!(output[page]["nextOffset"], Value::Null);
+        }
+        for (selector, source, available, total) in [
+            ("stack-2", "deployed", false, Value::Null),
+            ("stack-2", "configured", true, json!(0)),
+        ] {
+            let output = handler
+                .dispatch(
+                    &CallToolRequestParams::new("stacks.compose.read")
+                        .with_arguments(arguments(&json!({"selector":selector,"source":source}))),
+                )
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(output["filesPage"]["available"], available);
+            assert_eq!(output["filesPage"]["totalObserved"], total);
+        }
     }
 
     #[tokio::test]
