@@ -5,6 +5,9 @@ For uncertain write results, use the
 describe the tools; gateway authorization and sensitive-read approvals remain
 separate requirements.
 
+For smaller catalogs, on-demand schemas, and compatible result presentation, see
+[discovery efficiency](discovery-efficiency.md).
+
 ## Available tools
 
 Read-only tools:

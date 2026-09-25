@@ -24,8 +24,21 @@ not change stdio limits.
 | Deploy, restart, stop, build, cancel, and repository pull | Excluded | Named mutation tools | Gateway `komodo-admin` membership and applicable approval policy. |
 | Configuration, content, file, and webhook writes | Excluded | Typed partial intents | Administrative upstream identity, gateway authorization, and consequential-write approval. |
 
-The current profiles are status-only stdio and full HTTP; this table groups
-capabilities and does not imply additional selectable runtime profiles.
+HTTP defaults to the full catalog. Select a smaller process-wide catalog with
+`--tool-profile status`, `--tool-profile read-only`, or `--tool-profile operations`:
+
+| HTTP tool profile | Included capabilities |
+| --- | --- |
+| `status` | Ordinary status/search and webhook-source metadata; no sensitive content or writes. |
+| `read-only` | All reads, including separately governed logs, configuration, and custom secrets. |
+| `operations` | Ordinary reads plus deploy, restart, stop, build, cancel, and repository pull. |
+| `full` | Every typed read, action, and configuration write. |
+
+Excluded tools are hidden from discovery and rejected when called directly.
+Profiles limit the whole process; they do not replace user authorization or
+approval policy. HTTP startup still requires the documented separate read/admin
+credentials for every profile. Local stdio always keeps its status-only boundary
+and cannot be combined with `--tool-profile`.
 HTTP always requires both the rotating gateway bearer and a verified identity
 JWT. A visible tool or an MCP annotation does not itself grant permission.
 For a configuration task, select the intended [write consequence](tool-surface.md#choose-the-intended-configuration-effect)
@@ -118,9 +131,11 @@ Mode flags are mutually exclusive:
   to 64 KiB, with at most 32 pending requests. Initialization and output each
   have a 30-second deadline. See [stdio limits](quickstart.md#limits-and-failures).
 - `--emit-tools-json` prints the full standard MCP `tools/list` catalog without
-  loading runtime credentials. It includes schemas and annotations.
+  loading runtime credentials. Add `--tool-profile` to inspect the selected
+  capability catalog. It includes schemas and annotations.
 - `--emit-gateway-manifest` prints a gateway-specific connection and tool-risk
-  scaffold without runtime credentials. It contains no authorization or approval
+  scaffold without runtime credentials; `--tool-profile` selects the same subset
+  as HTTP discovery. It contains no authorization or approval
   policy and needs gateway-computed behavior hashes before publication; see
   [gateway deployment](gateway-setup.md#configure-the-gateway-and-server).
 - `--healthcheck` loads only host and port, performs a local `/healthz` request

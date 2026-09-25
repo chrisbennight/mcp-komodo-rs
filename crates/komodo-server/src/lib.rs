@@ -7,7 +7,7 @@ mod lifecycle;
 pub mod server;
 pub mod stdio;
 
-use komodo_mcp::TOOL_REGISTRY;
+use komodo_mcp::{KomodoMcp, TOOL_REGISTRY, ToolProfile};
 
 /// Render an annotation-native gateway manifest scaffold from the executable
 /// tool registry.
@@ -22,6 +22,13 @@ use komodo_mcp::TOOL_REGISTRY;
 /// manifest-change preview before publishing.
 #[must_use]
 pub fn gateway_manifest() -> String {
+    gateway_manifest_for_profile(ToolProfile::Full)
+}
+
+/// Render the scaffold for the same capability profile used by HTTP discovery.
+#[must_use]
+pub fn gateway_manifest_for_profile(profile: ToolProfile) -> String {
+    let catalog = KomodoMcp::list_tools_for_profile(profile);
     let mut output = String::from(
         "# Annotation-native scaffold. classification_mode: mcp_annotations makes\n\
          # the sidecar's MCP annotations the sole source of tool effects and\n\
@@ -30,7 +37,10 @@ pub fn gateway_manifest() -> String {
          # from the gateway manifest-change preview's observed_behavior_hash.\n\
          name: komodo\ntransport: http\nurl: http://komodo-mcp:8000/mcp\nclassification_mode: mcp_annotations\nauth:\n  bearer_env: MCP_GATEWAY_UPSTREAM_BEARER_KOMODO\nsession:\n  isolation: per_call\ntools:\n",
     );
-    for policy in TOOL_REGISTRY {
+    for policy in TOOL_REGISTRY
+        .iter()
+        .filter(|spec| catalog.tools.iter().any(|tool| tool.name == spec.name))
+    {
         output.push_str("  - name: ");
         output.push_str(policy.name);
         output.push_str("\n    risk: ");

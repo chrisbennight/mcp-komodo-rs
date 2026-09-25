@@ -108,6 +108,10 @@ on every MCP request. A Komodo API key alone cannot authenticate an ordinary
 client to it. The gateway owns per-user policy and approvals; tool annotations
 do not grant access. [Configure the gateway profile](docs/gateway-setup.md).
 
+HTTP can expose a smaller catalog with `--tool-profile status`, `read-only`, or
+`operations`; the default is `full`. See the [capability matrix](docs/configuration.md#select-a-profile)
+before choosing: `read-only` includes governed sensitive content and custom secrets.
+
 The server exposes typed, bounded operations. It does not provide a raw Komodo
 API proxy, arbitrary shell access, or Docker inspection. Authorized sensitive
 reads can return sensitive content to the caller. Komodo may retain submitted

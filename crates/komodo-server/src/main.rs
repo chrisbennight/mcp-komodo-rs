@@ -8,8 +8,10 @@ use std::{
 use anyhow::{Context, Result};
 use clap::Parser;
 use komodo_api::{Client, KomodoApi};
-use komodo_mcp::KomodoMcp;
-use komodo_server::{config::Settings, diagnostics, gateway_manifest, server::build_router};
+use komodo_mcp::{KomodoMcp, ToolProfile};
+use komodo_server::{
+    config::Settings, diagnostics, gateway_manifest_for_profile, server::build_router,
+};
 use rmcp::ServiceExt;
 use tokio::{net::TcpListener, signal};
 use tokio_util::sync::CancellationToken;
@@ -17,7 +19,6 @@ use tracing::info;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Security-bounded Komodo MCP server")]
-#[group(multiple = false)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "Clap models mutually exclusive command-line flags as booleans"
@@ -27,7 +28,7 @@ struct Args {
     #[arg(long, conflicts_with_all = ["healthcheck", "emit_gateway_manifest", "emit_tools_json"])]
     stdio: bool,
     /// Check only the local liveness endpoint and exit.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["emit_gateway_manifest", "emit_tools_json"])]
     healthcheck: bool,
     /// Print the gateway manifest generated from the tool registry and exit.
     #[arg(long)]
@@ -35,6 +36,9 @@ struct Args {
     /// Print the full standard MCP tools/list catalog without runtime credentials.
     #[arg(long, conflicts_with_all = ["healthcheck", "emit_gateway_manifest"])]
     emit_tools_json: bool,
+    /// HTTP/export capabilities: status, read-only, operations, or full. User authorization remains separate.
+    #[arg(long, default_value = "full", conflicts_with_all = ["stdio", "healthcheck"]) ]
+    tool_profile: ToolProfile,
 }
 
 fn main() -> Result<()> {
@@ -49,12 +53,15 @@ fn main() -> Result<()> {
 async fn run() -> Result<()> {
     let args = Args::parse();
     if args.emit_tools_json {
-        serde_json::to_writer(std::io::stdout().lock(), &KomodoMcp::list_tools_payload())
-            .context("write tool catalog")?;
+        serde_json::to_writer(
+            std::io::stdout().lock(),
+            &KomodoMcp::list_tools_for_profile(args.tool_profile),
+        )
+        .context("write tool catalog")?;
         return Ok(());
     }
     if args.emit_gateway_manifest {
-        print!("{}", gateway_manifest());
+        print!("{}", gateway_manifest_for_profile(args.tool_profile));
         return Ok(());
     }
     if args.healthcheck {
@@ -77,7 +84,7 @@ async fn run() -> Result<()> {
         settings.admin_credentials.clone(),
         settings.upstream_timeout,
     )?);
-    let handler = KomodoMcp::new(read, admin);
+    let handler = KomodoMcp::new(read, admin).with_tool_profile(args.tool_profile);
     let cancellation = CancellationToken::new();
     let router = build_router(&settings, handler, &cancellation)?;
     let address: SocketAddr = format!("{}:{}", settings.host, settings.port)
