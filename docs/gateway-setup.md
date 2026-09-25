@@ -69,6 +69,11 @@ make a mismatch disappear. Re-preview the complete intended manifest and
 resolve quarantine findings before requesting publication approval. Preserve
 unrelated manifests and use the control plane's current revision precondition.
 
+When using a reduced HTTP capability profile, pass the same `--tool-profile`
+value to both metadata export commands and the serving process. A full scaffold
+does not describe a restricted deployment. The gateway still applies user policy
+and approvals to every tool admitted by the selected profile.
+
 Neither export contains an authorization or approval policy. You must configure
 that policy in the gateway. Permit ordinary status reads only for authenticated
 users, require `komodo-admin` for mutations, and separately govern sensitive
