@@ -93,10 +93,25 @@ separately named sensitive read may expose bounded configuration or diagnostic
 content when its schema, annotations, gateway policy, and result handling make
 that disclosure explicit.
 
-Search inputs accept an optional 128-byte case-insensitive substring, a bounded
+Search inputs accept an optional 128-byte ASCII-case-insensitive substring, a bounded
 offset, and a limit from 1 through 50. Results are sorted by normalized name and
 id before slicing. Status selectors accept an exact name or id and fail on
 ambiguity.
+
+Input limits are checked before upstream reads, including resource resolution.
+Invalid requests therefore fail locally even when Komodo is unavailable. Query
+length and control characters are checked before whitespace trimming; ordinary
+leading and trailing spaces are then removed, and an empty query matches all.
+Selectors remain exact inputs without trimming.
+
+Published input schemas include numeric ranges, collection sizes, and necessary
+string-length bounds and control-character exclusions. JSON Schema counts characters, while runtime string limits
+count UTF-8 bytes: 128 for selectors, operation ids, service names, and queries;
+512 for paths; and 262144 for written content, commands, and custom webhook
+secrets. Field descriptions state these byte limits. Unicode remains supported,
+but a multibyte value can satisfy `maxLength` and still exceed its byte budget.
+Runtime validation also checks control characters and whether a partial intent
+actually supplies a change. No schema check replaces that validation.
 
 `operations.search` returns a bounded page of Komodo's update list, while
 `operations.status` resolves one operation by its stable id through Komodo
