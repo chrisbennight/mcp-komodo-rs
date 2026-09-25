@@ -7,12 +7,11 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use komodo_api::{Client, KomodoApi};
 use komodo_mcp::KomodoMcp;
-use komodo_server::{config::Settings, gateway_manifest, server::build_router};
+use komodo_server::{config::Settings, diagnostics, gateway_manifest, server::build_router};
 use rmcp::ServiceExt;
 use tokio::{net::TcpListener, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Security-bounded Komodo MCP server")]
@@ -64,10 +63,7 @@ async fn run() -> Result<()> {
     }
 
     let settings = Settings::from_env().context("invalid server configuration")?;
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(EnvFilter::try_new(&settings.log_level).context("invalid log filter")?)
-        .init();
+    diagnostics::init(&settings.log_level).map_err(|_| anyhow::anyhow!("invalid log filter"))?;
 
     let read: Arc<dyn KomodoApi> = Arc::new(Client::new(
         settings.upstream_url.clone(),
@@ -86,7 +82,7 @@ async fn run() -> Result<()> {
         .parse()
         .context("invalid listen address")?;
     let listener = TcpListener::bind(address).await.context("bind listener")?;
-    info!(%address, "Komodo MCP listening");
+    info!(target: diagnostics::TARGET, "Komodo MCP listening");
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown(cancellation))
         .await

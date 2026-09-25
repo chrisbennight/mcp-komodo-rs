@@ -22,6 +22,7 @@ use komodo_mcp::KomodoMcp;
 use crate::{
     auth::{IdentityVerifier, IngressAuth, require_gateway},
     config::Settings,
+    diagnostics,
 };
 
 #[derive(Debug, Serialize)]
@@ -76,7 +77,22 @@ pub fn build_router(
     Ok(Router::new()
         .route("/healthz", get(healthz))
         .merge(mcp)
-        .layer(TraceLayer::new_for_http()))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|_: &Request| tracing::Span::none())
+                .on_request(())
+                .on_failure(())
+                .on_response(
+                    |response: &Response, latency: std::time::Duration, _: &tracing::Span| {
+                        tracing::debug!(
+                            target: diagnostics::TARGET,
+                            status = response.status().as_u16(),
+                            duration_ms = latency.as_secs_f64() * 1000.0,
+                            "HTTP request completed"
+                        );
+                    },
+                ),
+        ))
 }
 
 async fn enforce_body_limit(State(limit): State<usize>, request: Request, next: Next) -> Response {
