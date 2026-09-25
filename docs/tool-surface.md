@@ -122,6 +122,38 @@ and every content-bearing read labels its result `sensitive` and `untrusted`.
 
 ## Mutation contract
 
+### Choose the intended configuration effect
+
+Configuration and deployment are separate steps. Check the stack's source mode
+and desired change before selecting a write. A successful partial configuration
+update records the supplied fields; it does not prove the running application
+has adopted them. Inspect the receipt and reconcile an uncertain result before
+deciding whether to deploy or submit another write.
+
+| Tool | Replacement and clearing | Read to reconcile |
+| --- | --- | --- |
+| `stacks.config.patch` | Only supplied structural fields change. An empty `file_paths` list clears the list; individual path values must be nonempty. | `stacks.config.read` |
+| `stacks.compose.write` | Replaces the complete inline Compose text; empty clears it. It does not switch away from a repository or host-file source. | `stacks.compose.read` with `source: "configured"` |
+| `stacks.environment.write` | Replaces the entire environment text; it does not merge individual variables. Empty clears the configured text. | `stacks.environment.read` |
+| `stacks.commands.write` | Replaces each supplied command object, leaving omitted pre/post commands unchanged. Empty command text clears that command. Stored commands run later with upstream deployment privileges. | `stacks.commands.read` |
+| `stacks.file.write` | Writes a complete file in repository or files-on-host mode; empty content leaves an empty file. Core enforces the applicable mode and path rules. | `operations.status` using the returned operation ID |
+| `stacks.webhook.update` | Only supplied flags change; their values affect subsequent webhook handling. | `stacks.webhook.status` |
+| `stacks.webhook.secret.write` | Replaces the custom value with a nonempty secret. Clearing it to restore inheritance is not supported. The shared Core secret remains unavailable through this server. | `stacks.webhook.status`, or `stacks.webhook.secret.read` for an authorized custom-value check |
+
+Inline Compose is stored configuration text. Repository and host-file modes use
+files selected by Core instead. The configured, latest, and deployed Compose
+views answer different questions: desired input, the latest content observed by
+Core, and content associated with its deployed state. None substitutes for live
+application-health evidence.
+
+Before approval, present the target, affected fields, replacement or clearing
+intent, source-mode implications, later execution/deployment consequences, and
+the fact that Komodo may retain submitted content. Exclude values, secret
+hashes, raw commands, and content from approval and audit records. An upstream
+retention disclosure does not authorize retaining those values in MCP logs.
+
+### Validation and reconciliation
+
 Mutation tools accept one exact resource selector and an operation-specific
 typed intent. They do not accept arbitrary JSON, endpoint names, wildcard
 actions, or generic resource objects. The result is a minimal receipt suitable

@@ -16,6 +16,21 @@ Starting without a mode flag selects the full HTTP gateway profile. All settings
 marked required below apply to that profile. Listener and gateway variables do
 not change stdio limits.
 
+| Capability | Local status-only stdio | Full HTTP gateway profile | Access boundary |
+| --- | --- | --- | --- |
+| Ordinary status and search | Available | Available when admitted by the gateway | Restrict the read service user to the intended resources. |
+| Diagnostics, logs, configuration, Compose, environment, and commands | Excluded, including direct calls by name | Separately named sensitive reads | Gateway authorization must permit the specific sensitive capability. |
+| Custom webhook secret | Excluded | Governed secret read/write tools | Secret values and their source/presence metadata have different exposure rules. |
+| Deploy, restart, stop, build, cancel, and repository pull | Excluded | Named mutation tools | Gateway `komodo-admin` membership and applicable approval policy. |
+| Configuration, content, file, and webhook writes | Excluded | Typed partial intents | Administrative upstream identity, gateway authorization, and consequential-write approval. |
+
+The current profiles are status-only stdio and full HTTP; this table groups
+capabilities and does not imply additional selectable runtime profiles.
+HTTP always requires both the rotating gateway bearer and a verified identity
+JWT. A visible tool or an MCP annotation does not itself grant permission.
+For a configuration task, select the intended [write consequence](tool-surface.md#choose-the-intended-configuration-effect)
+before changing values or deciding to deploy.
+
 ## Komodo connection
 
 | Variable | Default | Contract |
