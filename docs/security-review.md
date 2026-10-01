@@ -31,6 +31,14 @@ versions; the gate still rejects advisories and unknown sources.
 
 ## Container findings
 
+The current Dockerfile uses a digest-pinned `base-nossl-debian12` runtime. The
+image gate identified CVE-2026-84782 in the previous base's unused OpenSSL
+package. The executable uses Rustls and links libc, libm, and the GCC support
+library. The final image copies only that support library, its package records,
+and GCC copyright notices from the previous pinned official image. It retains
+the no-OpenSSL base's CA certificates and non-root user. Source-image smoke
+tests and fresh SBOM scans remain required; no advisory is suppressed.
+
 These dispositions apply to the reviewed preparation snapshot. They do not
 suppress scanner results. The low/medium findings below must be revisited if
 native interfaces, TLS providers, target architecture, or the image changes.
