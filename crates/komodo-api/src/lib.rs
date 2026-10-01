@@ -468,7 +468,8 @@ impl Client {
     }
 
     async fn read<T: DeserializeOwned>(&self, variant: &'static str) -> Result<T, ApiError> {
-        self.post("read", variant, json!({ "query": {} }), true)
+        // Local search and selector resolution require the complete visible inventory.
+        self.post("read", variant, json!({ "query": {}, "limit": 0 }), true)
             .await
     }
 
@@ -738,32 +739,54 @@ mod tests {
     #[tokio::test]
     async fn list_servers_uses_the_typed_envelope_and_discards_sensitive_fields() {
         let server = MockServer::start().await;
+        let mut resources = (0..60)
+            .map(|index| {
+                json!({
+                    "id": format!("server-{index}"),
+                    "type": "Server",
+                    "name": format!("server-{index:03}"),
+                    "info": { "state": "Ok", "version": "1.18.4" }
+                })
+            })
+            .collect::<Vec<_>>();
+        resources.push(json!({
+            "id": "server-last",
+            "type": "Server",
+            "name": "z-target-server",
+            "config": { "address": "SENTINEL_PRIVATE_ADDRESS" },
+            "info": {
+                "state": "Ok",
+                "version": "1.18.4",
+                "public_key": "SENTINEL_PUBLIC_KEY"
+            }
+        }));
         Mock::given(method("POST"))
             .and(path("/read"))
             .and(header("x-api-key", "read-key"))
             .and(header("x-api-secret", "read-secret"))
-            .and(body_json(json!({
-                "type": "ListServers",
-                "params": { "query": {} }
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
-                "id": "server-1",
-                "type": "Server",
-                "name": "mini",
-                "config": { "address": "SENTINEL_PRIVATE_ADDRESS" },
-                "info": {
-                    "state": "Ok",
-                    "version": "1.18.4",
-                    "public_key": "SENTINEL_PUBLIC_KEY"
-                }
-            }])))
+            .respond_with(move |request: &wiremock::Request| {
+                let payload: serde_json::Value = request.body_json().expect("read envelope");
+                assert_eq!(payload["type"], "ListServers");
+                assert_eq!(payload["params"]["query"], json!({}));
+                let visible = if payload["params"]["limit"] == 0 {
+                    &resources[..]
+                } else {
+                    &resources[..50]
+                };
+                ResponseTemplate::new(200).set_body_json(visible)
+            })
             .expect(1)
             .mount(&server)
             .await;
 
         let result = client(&server).servers().await.expect("server list");
-        assert_eq!(result[0].name, "mini");
-        assert_eq!(result[0].info.state, "Ok");
+        assert_eq!(result.len(), 61);
+        let target = result
+            .iter()
+            .find(|item| item.name == "z-target-server")
+            .expect("target beyond the default resource page");
+        assert_eq!(target.id, "server-last");
+        assert_eq!(target.info.state, "Ok");
         let normalized = format!("{result:?}");
         assert!(!normalized.contains("SENTINEL"));
     }
