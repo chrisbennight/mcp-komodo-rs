@@ -44,7 +44,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked --bin komodo-mcp-rs \
     && cp target/release/komodo-mcp-rs /usr/local/bin/komodo-mcp-rs
 
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime
+# Preserve the vetted GCC support library without shipping unused TLS libraries.
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime-libraries
+
+FROM gcr.io/distroless/base-nossl-debian12:nonroot@sha256:be40c00dfabd86576d92666e87e406714d5618342de1a0c213ad232de255172e AS runtime
+COPY --from=runtime-libraries /lib/x86_64-linux-gnu/libgcc_s.so.1 /lib/x86_64-linux-gnu/libgcc_s.so.1
+COPY --from=runtime-libraries /var/lib/dpkg/status.d/libgcc-s1 /var/lib/dpkg/status.d/libgcc-s1.md5sums /var/lib/dpkg/status.d/gcc-12-base /var/lib/dpkg/status.d/gcc-12-base.md5sums /var/lib/dpkg/status.d/
+COPY --from=runtime-libraries /usr/share/doc/gcc-12-base/ /usr/share/doc/gcc-12-base/
 COPY --from=builder /usr/local/bin/komodo-mcp-rs /komodo-mcp-rs
 
 EXPOSE 8000
