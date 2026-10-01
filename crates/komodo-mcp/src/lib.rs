@@ -34,13 +34,10 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 const MAX_QUERY_BYTES: usize = 128;
 const MAX_SELECTOR_BYTES: usize = 128;
-const MAX_LIMIT: u16 = 50;
 const MAX_OFFSET: u16 = 10_000;
 const MAX_OPERATION_PAGE: u32 = 100;
-/// Upper bound on per-service and missing-file entries returned by diagnostics,
-/// keeping a single stack's normalized diagnostic response bounded.
-/// Maximum Compose files and operation-log records returned by a single read.
-const MAX_CONTENT_ITEMS: u16 = 250;
+/// Default Compose files and operation-log records selected from a bounded response.
+const DEFAULT_CONTENT_ITEMS: usize = 250;
 const MAX_COLLECTION_OFFSET: u32 = 2_097_152;
 /// Maximum byte length accepted for a single written content or command field.
 const MAX_WRITE_CONTENT_BYTES: usize = 256 * 1024;
@@ -602,13 +599,13 @@ struct SearchInput {
     #[serde(default)]
     #[schemars(range(max = MAX_OFFSET))]
     offset: u16,
-    /// Maximum results to return; accepted range is 1 through 50.
+    /// Maximum results to return from the bounded upstream inventory; defaults to 20.
     #[serde(default = "default_limit")]
-    #[schemars(range(min = 1, max = MAX_LIMIT))]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
-const fn default_limit() -> u16 {
+const fn default_limit() -> usize {
     20
 }
 
@@ -656,29 +653,28 @@ struct CollectionWindow {
     #[serde(default)]
     #[schemars(range(max = 2_097_152))]
     offset: u32,
-    /// Maximum records per collection, from 1 through 250; defaults to 250.
+    /// Maximum records per collection from a bounded upstream response; defaults to 250.
     #[serde(default = "default_content_limit")]
-    #[schemars(range(min = 1, max = 250))]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
-const fn default_content_limit() -> u16 {
-    MAX_CONTENT_ITEMS
+const fn default_content_limit() -> usize {
+    DEFAULT_CONTENT_ITEMS
 }
 
 impl Default for CollectionWindow {
     fn default() -> Self {
         Self {
             offset: 0,
-            limit: MAX_CONTENT_ITEMS,
+            limit: DEFAULT_CONTENT_ITEMS,
         }
     }
 }
 
 impl CollectionWindow {
     fn validate(self) -> Result<(), McpError> {
-        if self.offset > MAX_COLLECTION_OFFSET || self.limit == 0 || self.limit > MAX_CONTENT_ITEMS
-        {
+        if self.offset > MAX_COLLECTION_OFFSET || self.limit == 0 {
             return Err(McpError::invalid_params(
                 "collection window is outside its supported range",
                 None,
@@ -881,10 +877,10 @@ struct OperationsSearchInput {
     /// At most 128 UTF-8 bytes before trimming; no control characters.
     #[schemars(length(max = MAX_QUERY_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     query: Option<String>,
-    /// Maximum results to return; accepted range is 1 through 50.
+    /// Maximum results to return from the bounded upstream page; defaults to 20.
     #[serde(default = "default_limit")]
-    #[schemars(range(min = 1, max = MAX_LIMIT))]
-    limit: u16,
+    #[schemars(range(min = 1))]
+    limit: usize,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1084,12 +1080,8 @@ fn collection_page<T>(items: Option<Vec<T>>, window: CollectionWindow) -> (Vec<T
     let items = items.unwrap_or_default();
     let total = items.len();
     let offset = usize::try_from(window.offset).expect("supported collection offset fits usize");
-    let end = offset.saturating_add(usize::from(window.limit)).min(total);
-    let items: Vec<_> = items
-        .into_iter()
-        .skip(offset)
-        .take(usize::from(window.limit))
-        .collect();
+    let end = offset.saturating_add(window.limit).min(total);
+    let items: Vec<_> = items.into_iter().skip(offset).take(window.limit).collect();
     let page = CollectionPage {
         available,
         returned: items.len(),
@@ -1814,7 +1806,7 @@ impl KomodoMcp {
         let items = matches
             .into_iter()
             .skip(usize::from(input.offset))
-            .take(usize::from(input.limit))
+            .take(input.limit)
             .collect::<Vec<_>>();
         let consumed = usize::from(input.offset) + items.len();
         let next_offset = (consumed < total)
@@ -2453,7 +2445,7 @@ fn search<I, O>(
             .then_with(|| left.id.cmp(&right.id))
     });
     let offset = usize::from(input.offset);
-    let limit = usize::from(input.limit);
+    let limit = input.limit;
     let total = resources.len();
     let items = resources
         .into_iter()
@@ -2487,14 +2479,11 @@ fn validate_search(input: &SearchInput) -> Result<Option<String>, McpError> {
     validate_query(input.query.as_deref())
 }
 
-fn validate_limit(limit: u16) -> Result<(), McpError> {
-    if (1..=MAX_LIMIT).contains(&limit) {
+fn validate_limit(limit: usize) -> Result<(), McpError> {
+    if limit > 0 {
         Ok(())
     } else {
-        Err(McpError::invalid_params(
-            "limit must be between 1 and 50",
-            None,
-        ))
+        Err(McpError::invalid_params("limit must be positive", None))
     }
 }
 
@@ -4155,7 +4144,7 @@ mod tests {
         let request =
             CallToolRequestParams::new("servers.search").with_arguments(arguments(&json!({
                 "query": null,
-                "limit": 51,
+                "limit": 0,
                 "offset": 0
             })));
         assert!(handler().dispatch(&request).await.is_err());
@@ -4179,7 +4168,6 @@ mod tests {
         ] {
             for args in [
                 json!({"limit":0}),
-                json!({"limit":51}),
                 json!({"offset":10001}),
                 json!({"query":"x".repeat(129)}),
                 json!({"query":"é".repeat(65)}),
@@ -4288,7 +4276,6 @@ mod tests {
             }
             for invalid in [
                 json!({"limit":0}),
-                json!({"limit":51}),
                 json!({"offset":10001}),
                 json!({"query":"x".repeat(129)}),
             ] {
@@ -4710,6 +4697,68 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn positive_selection_limits_use_bounded_inventory_without_a_count_ceiling() {
+        for name in [
+            "servers.search",
+            "stacks.search",
+            "deployments.search",
+            "builds.search",
+            "repos.search",
+            "operations.search",
+        ] {
+            let input = json!({"limit": 100_000});
+            let tool = KomodoMcp::list_tools_payload()
+                .tools
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap();
+            assert!(validates(
+                &Value::Object((*tool.input_schema).clone()),
+                &input
+            ));
+            let output = handler()
+                .dispatch(&CallToolRequestParams::new(name).with_arguments(arguments(&input)))
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert!(!output["items"].as_array().unwrap().is_empty());
+            assert!(!output["truncated"].as_bool().unwrap());
+        }
+        let resources = || {
+            (0..125)
+                .map(|index| resource(&index.to_string(), &format!("resource-{index:03}"), ()))
+                .collect()
+        };
+        for limit in [100, usize::MAX] {
+            let page = search(
+                resources(),
+                &SearchInput {
+                    query: None,
+                    offset: 0,
+                    limit,
+                },
+                |item| item.id,
+            )
+            .unwrap();
+            assert_eq!(page.items.len(), limit.min(125));
+            assert_eq!(page.next_offset, (limit < 125).then_some(100));
+        }
+        let (items, page) = super::collection_page(
+            Some((0..300).collect::<Vec<_>>()),
+            super::CollectionWindow {
+                offset: 1,
+                limit: usize::MAX,
+            },
+        );
+        assert_eq!(items.len(), 299);
+        assert_eq!(page.returned, 299);
+        assert_eq!(page.total_observed, Some(300));
+        assert_eq!(page.next_offset, None);
+        assert!(page.truncated);
+    }
+
     #[test]
     fn resource_pagination_never_advertises_an_unusable_offset() {
         let resources = (0..10_052)
@@ -4899,7 +4948,7 @@ mod tests {
             .is_ok()
         );
 
-        for (offset, limit) in [(10_001, 1), (0, 0), (0, 51)] {
+        for (offset, limit) in [(10_001, 1), (0, 0)] {
             assert!(
                 search(
                     resources.clone(),
@@ -5217,7 +5266,6 @@ mod tests {
         ] {
             for window in [
                 json!({"limit":0}),
-                json!({"limit":251}),
                 json!({"offset":2_097_153}),
                 json!({"offset":-1}),
                 json!({"unexpected":1}),
@@ -5276,6 +5324,40 @@ mod tests {
                 .unwrap();
             assert_eq!(output["filesPage"]["available"], available);
             assert_eq!(output["filesPage"]["totalObserved"], total);
+        }
+    }
+
+    #[tokio::test]
+    async fn large_collection_windows_are_published_and_reach_each_read_handler() {
+        for (name, key, value, page) in [
+            ("stacks.diagnostics", "selector", "stack-1", "servicesPage"),
+            ("stacks.config.read", "selector", "stack-1", "filePathsPage"),
+            ("stacks.compose.read", "selector", "stack-1", "filesPage"),
+            (
+                "operations.logs.read",
+                "operation_id",
+                "operation-1",
+                "logsPage",
+            ),
+        ] {
+            let input = json!({key:value, "window":{"limit":100_000}});
+            let tool = TOOL_REGISTRY
+                .iter()
+                .find(|spec| spec.name == name)
+                .unwrap()
+                .catalog_tool();
+            assert!(validates(
+                &Value::Object((*tool.input_schema).clone()),
+                &input
+            ));
+            let output = handler()
+                .dispatch(&CallToolRequestParams::new(name).with_arguments(arguments(&input)))
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(output[page]["returned"], output[page]["totalObserved"]);
+            assert_eq!(output[page]["nextOffset"], Value::Null);
         }
     }
 

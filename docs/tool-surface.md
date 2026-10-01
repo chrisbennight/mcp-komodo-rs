@@ -43,7 +43,8 @@ Administrative tools:
 - typed webhook writes: `stacks.webhook.update` (enabled and force-deploy flags)
   and `stacks.webhook.secret.write` (custom secret).
 
-Search output is locally filtered, sorted, and capped at 50 items.
+Search output is locally filtered, sorted, and selected by the caller's positive
+limit, which defaults to 20.
 Resource pages never advertise an offset beyond 10000. `truncated: true` means
 matching items remain beyond that supported range; narrow the query. Each
 request fetches the bounded upstream inventory before local filtering, so an
@@ -55,8 +56,8 @@ arrive, so these cursors are not snapshot guarantees. `operations.status`
 resolves one operation by its stable id rather than a moving page (its former
 `page` argument is accepted but ignored for one release). `stacks.diagnostics`
 returns bounded operational signals — state, Docker status text, missing Compose
-file paths, and per-service image and update flags, each returned page capped at
-250 entries — and is classified sensitive so its results are labeled accordingly.
+file paths, and per-service image and update flags, with 250 entries per collection
+by default — and is classified sensitive so its results are labeled accordingly.
 The governed sensitive reads return bounded configuration, Compose, environment,
 command, log, and webhook-secret content labeled sensitive; a stack that inherits
 its webhook secret reports `source: "inherited"` with `valueAvailable: false` and
@@ -94,7 +95,7 @@ content when its schema, annotations, gateway policy, and result handling make
 that disclosure explicit.
 
 Search inputs accept an optional 128-byte ASCII-case-insensitive substring, a bounded
-offset, and a limit from 1 through 50. Results are sorted by normalized name and
+offset, and a positive limit. Results are sorted by normalized name and
 id before slicing. Status selectors accept an exact name or id and fail on
 ambiguity.
 
@@ -147,7 +148,9 @@ and every content-bearing read labels its result `sensitive` and `untrusted`.
 `stacks.diagnostics`, `stacks.config.read`, `stacks.compose.read`, and
 `operations.logs.read` accept `window: {"offset":0,"limit":250}`. Both fields
 are optional within the optional window: offset defaults to zero and limit to
-250. Limits are 1–250 records and offsets 0–2097152. Invalid windows are rejected
+250. Limits must be positive and offsets are 0–2097152. Larger limits select
+more of the current bounded response without additional upstream requests.
+Invalid windows are rejected
 before any upstream read. Omission retains the first-page behavior.
 
 Each collection has adjacent page metadata: `servicesPage`, `missingFilesPage`,
