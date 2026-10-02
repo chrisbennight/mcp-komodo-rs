@@ -22,13 +22,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Select changed components
+        id: scope
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ci-scope.sh
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        if: steps.scope.outputs.deps == 'true'
         with:
           rust-version: "1.96.0"
           arguments: --all-features --locked
           command: check
 
   test:
+    outputs:
+      image: ${{ steps.scope.outputs.image }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -41,8 +52,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
+      - name: Select changed components
+        id: scope
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ci-scope.sh
       - name: Install the pinned Rust toolchain
+        if: steps.scope.outputs.rust == 'true' || steps.scope.outputs.image == 'true'
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
@@ -59,22 +79,30 @@ jobs:
           rustup default "${RUST_TOOLCHAIN_VERSION}"
 
       - name: Verify formatting
+        if: steps.scope.outputs.rust == 'true'
         run: cargo fmt --all -- --check
       - name: Lint all targets
+        if: steps.scope.outputs.rust == 'true'
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Test all features
+        if: steps.scope.outputs.rust == 'true'
         run: cargo test --workspace --all-features --locked
       - name: Build documentation
+        if: steps.scope.outputs.rust == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
       - name: Validate documentation links
+        if: steps.scope.outputs.docs == 'true'
         run: python3 scripts/check_docs.py
       - name: Test repository tooling
+        if: steps.scope.outputs.python == 'true'
         run: python3 -m unittest discover -s scripts/tests
       - name: Package dependency license notices
+        if: steps.scope.outputs.image == 'true'
         run: python3 scripts/package_notices.py
       - name: Retain dependency notices
+        if: steps.scope.outputs.image == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dependency-notices-${{ github.sha }}
@@ -82,6 +110,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Verify generated gateway manifest
+        if: steps.scope.outputs.rust == 'true'
         run: |
           cargo run --locked -p komodo-server -- --emit-gateway-manifest > /tmp/komodo.yaml
           grep -q '^name: komodo$' /tmp/komodo.yaml
@@ -96,12 +125,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Select changed components
+        id: scope
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ci-scope.sh
       - name: Build and smoke the source image
+        if: steps.scope.outputs.image == 'true'
         run: bash scripts/test_image.sh
       - name: Scan the tested image and generate release evidence
+        if: steps.scope.outputs.image == 'true'
         run: bash scripts/scan_image.sh
       - name: Retain image inventory and scan reports
-        if: always()
+        if: (steps.scope.outputs.image == 'true') && (always())
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-evidence-${{ github.sha }}
@@ -111,9 +150,8 @@ jobs:
 
   publish:
     if: >-
-      github.event_name == 'push' &&
-      github.repository == 'chrisbennight/mcp-komodo-rs' &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      github.event_name == 'push' && github.repository == 'chrisbennight/mcp-komodo-rs' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) &&
+      needs.test.outputs.image == 'true'
     needs: [test, dependencies]
     runs-on: ubuntu-latest
     timeout-minutes: 30
