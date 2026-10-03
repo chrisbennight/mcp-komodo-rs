@@ -6,8 +6,14 @@ names are unchanged; containers still run `/komodo-mcp-rs`.
 ## Validation
 
 GitHub Actions runs the Rust and documentation checks listed in
-[the development instructions](../CONTRIBUTING.md#build-and-check). Pull requests then
-build the source image and check its liveness endpoint without access to Komodo
+[the development instructions](../CONTRIBUTING.md#build-and-check). Checks select
+the changed inputs: Markdown runs documentation checks, test changes run Rust
+checks, dependency changes run the dependency gate, and runtime or packaging
+changes build and check the image. Manual runs and version tags select all checks.
+Missing Git history fails selection. The existing check names remain required;
+a successful job can report that its costly steps were skipped.
+
+Pull requests with image inputs build the source image and check its liveness endpoint without access to Komodo
 or the gateway. The smoke container has no network, published port, or real
 credentials. A healthy result confirms liveness, not upstream connectivity.
 
@@ -23,7 +29,7 @@ require one. Do not put credentials in a mirror URL or Docker build argument.
 
 ## Container publication
 
-In `chrisbennight/mcp-komodo-rs`, pushes to `main` and version tags run the
+In `chrisbennight/mcp-komodo-rs`, pushes to `main` with image inputs and version tags run the
 source checks, build the image, and smoke it before publishing to
 `ghcr.io/chrisbennight/mcp-komodo-rs`. The publication job alone has
 `packages: write`, `id-token: write`, and `attestations: write`; its registry login
@@ -54,7 +60,7 @@ their license files; see [notice provenance](../licenses/README.md).
 
 ## Dependency and image evidence
 
-The `dependencies` job runs Cargo Deny against the supported Linux target,
+When dependencies or their policy change, the `dependencies` job runs Cargo Deny against the supported Linux target,
 including development dependencies. It checks RustSec advisories, licenses,
 and source registries. Vulnerability exceptions must name the advisory and
 record why the project is unaffected or what bounded risk is accepted; there
