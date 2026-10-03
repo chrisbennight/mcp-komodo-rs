@@ -38,13 +38,17 @@ validation runs do not publish.
 
 | Source | Image tags |
 | --- | --- |
-| `main` push | `sha-<full commit SHA>` and `latest` |
+| Current `main` push | `sha-<full commit SHA>` and `latest` |
+| Older `main` push | `sha-<full commit SHA>` only |
 | `vMAJOR.MINOR.PATCH` tag | `sha-<full commit SHA>` and the exact version tag |
 | Prerelease such as `v0.2.0-rc.1` | `sha-<full commit SHA>` and the exact prerelease tag |
 
 Version tags cannot contain build metadata (`+...`) because Docker tags do not
 accept it. Version-tag builds do not move `latest`. Use a registry digest for
 an immutable deployment reference; a tag alone is not an immutability guarantee.
+The publisher reads current `main` after qualification. Older runs can publish
+their immutable reference but cannot move `latest` backwards. If a documentation
+commit advances `main` during a build, rerun current `main` to advance `latest`.
 Publishing several tags is not atomic. If a push fails, check the registry and
 workflow before rerunning it rather than assuming nothing was published.
 

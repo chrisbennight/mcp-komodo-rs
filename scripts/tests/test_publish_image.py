@@ -30,6 +30,7 @@ class PublicationTests(unittest.TestCase):
             "GITHUB_EVENT_NAME": "push",
             "GITHUB_REPOSITORY": "chrisbennight/mcp-komodo-rs",
             "GITHUB_SHA": "a" * 40,
+            "PUBLICATION_MAIN_SHA": "a" * 40,
             "GITHUB_REF": "refs/heads/main",
             "GITHUB_ACTOR": "release-bot[bot]",
             "GITHUB_TOKEN": "test-only-workflow-token",
@@ -62,6 +63,7 @@ class PublicationTests(unittest.TestCase):
             {"GITHUB_REF": "refs/tags/v1.2.3-" + "x" * 128},
             {"GITHUB_ACTOR": "--username=other"},
             {"GITHUB_TOKEN": ""},
+            {"PUBLICATION_MAIN_SHA": ""},
         ]
         for override in cases:
             with self.subTest(override=override), patch.object(publish_image.subprocess, "run") as run:
@@ -113,6 +115,18 @@ class PublicationTests(unittest.TestCase):
                 publish_image.publish(self.environment(), self.local_id)
         self.assertEqual(len(pushed), 1)
         self.assertTrue(all(not config.exists() for config in configs))
+
+    def test_older_main_publishes_only_its_immutable_tag(self) -> None:
+        pushed = []
+
+        def docker(command, **kwargs):
+            if command[1] == "push":
+                pushed.append(command[-1])
+            return subprocess.CompletedProcess(command, 0, stdout=self.metadata(command))
+
+        with patch.object(publish_image.subprocess, "run", side_effect=docker):
+            publish_image.publish(self.environment(PUBLICATION_MAIN_SHA="d" * 40), self.local_id)
+        self.assertEqual(pushed, [f"{publish_image.IMAGE}:sha-{'a' * 40}"])
 
     def test_registry_verification_rejects_wrong_image_and_inconsistent_tags(self) -> None:
         for defect in ("wrong-config", "invalid-digest", "different-tags", "invalid-json", "oversized"):

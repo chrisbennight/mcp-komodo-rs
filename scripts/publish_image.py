@@ -71,6 +71,12 @@ def publication_tags(environment: Mapping[str, str]) -> list[str]:
 
 def publish(environment: Mapping[str, str], expected_image_digest: str) -> str:
     tags = publication_tags(environment)
+    if environment.get("GITHUB_REF") == "refs/heads/main":
+        current_main = environment.get("PUBLICATION_MAIN_SHA", "")
+        if not re.fullmatch(r"[0-9a-f]{40}", current_main):
+            raise ValueError("main publication requires the current source commit")
+        if current_main != environment["GITHUB_SHA"]:
+            tags = tags[:1]
     if not DIGEST.fullmatch(expected_image_digest):
         raise ValueError("publication requires the tested image configuration digest")
     actor = environment.get("GITHUB_ACTOR", "")

@@ -182,9 +182,21 @@ jobs:
           path: artifacts/*.json
           if-no-files-found: error
           retention-days: 90
+      - name: Read current main before moving latest
+        if: github.ref == 'refs/heads/main'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: .ci/publication-main
+          persist-credentials: false
+      - name: Resolve current main
+        id: publication_source
+        if: github.ref == 'refs/heads/main'
+        run: printf 'main=%s\n' "$(git -C .ci/publication-main rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Publish the tested image
         id: publish
         env:
+          PUBLICATION_MAIN_SHA: ${{ steps.publication_source.outputs.main }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/publish_image.py
       - name: Attest the verified registry manifest
