@@ -33,8 +33,8 @@ else
       Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain|crates/*/Cargo.toml) rust=true; deps=true; image=true ;;
       .cargo/*) rust=true; image=true ;;
       rustfmt.toml|.rustfmt.toml|clippy.toml|.clippy.toml) rust=true ;;
-      crates/*/tests/*|crates/*/benches/*) rust=true ;;
-      crates/*/*.md) docs=true ;;
+      crates/*/tests/*|crates/*/benches/*|crates/*/src/*_tests.rs) rust=true ;;
+      crates/*/*.md|licenses/*.md) docs=true ;;
       crates/*) rust=true; image=true ;;
       Dockerfile|.dockerignore|scripts/test_image.sh|scripts/scan_image.sh|scripts/record_build.py|scripts/publish_image.py|scripts/package_release_evidence.py|scripts/package_notices.py|licenses/*|LICENSE|THIRD_PARTY_NOTICES.md)
         image=true ;;
