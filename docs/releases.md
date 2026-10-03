@@ -48,7 +48,8 @@ accept it. Version-tag builds do not move `latest`. Use a registry digest for
 an immutable deployment reference; a tag alone is not an immutability guarantee.
 The publisher reads current `main` after qualification. Older runs can publish
 their immutable reference but cannot move `latest` backwards. If a documentation
-commit advances `main` during a build, rerun current `main` to advance `latest`.
+commit advances `main` during a build, `latest` waits for the next image-relevant
+push to `main`. The tested image remains available by its immutable reference.
 Publishing several tags is not atomic. If a push fails, check the registry and
 workflow before rerunning it rather than assuming nothing was published.
 

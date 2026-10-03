@@ -6,6 +6,7 @@ deps=false
 python=false
 docs=false
 image=false
+publish=false
 case "${GITHUB_EVENT_NAME:?event is required}" in
   workflow_dispatch|schedule) full=true ;;
   push|pull_request)
@@ -15,7 +16,7 @@ case "${GITHUB_EVENT_NAME:?event is required}" in
   *) echo 'Unsupported CI event' >&2; exit 1 ;;
 esac
 if [[ "$full" == true ]]; then
-  rust=true; deps=true; python=true; docs=true; image=true
+  rust=true; deps=true; python=true; docs=true; image=true; publish=true
 else
   [[ "${BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || { echo 'A full base commit is required' >&2; exit 1; }
   changed_files="$(mktemp)"
@@ -30,13 +31,15 @@ else
       scripts/ci-scope.sh) rust=true; deps=true; python=true; docs=true; image=true ;;
 
       .github/workflows/*) rust=true; deps=true; python=true; docs=true; image=true ;;
-      Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain|crates/*/Cargo.toml) rust=true; deps=true; image=true ;;
-      .cargo/*) rust=true; image=true ;;
+      Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain|crates/*/Cargo.toml) rust=true; deps=true; image=true; publish=true ;;
+      .cargo/*) rust=true; image=true; publish=true ;;
       rustfmt.toml|.rustfmt.toml|clippy.toml|.clippy.toml) rust=true ;;
       crates/*/tests/*|crates/*/benches/*|crates/*/src/*_tests.rs) rust=true ;;
       crates/*/*.md|licenses/*.md) docs=true ;;
-      crates/*) rust=true; image=true ;;
-      Dockerfile|.dockerignore|scripts/test_image.sh|scripts/scan_image.sh|scripts/record_build.py|scripts/publish_image.py|scripts/package_release_evidence.py|scripts/package_notices.py|licenses/*|LICENSE|THIRD_PARTY_NOTICES.md)
+      crates/*) rust=true; image=true; publish=true ;;
+      Dockerfile|.dockerignore|licenses/*|LICENSE|THIRD_PARTY_NOTICES.md)
+        image=true; publish=true ;;
+      scripts/test_image.sh|scripts/scan_image.sh|scripts/record_build.py|scripts/publish_image.py|scripts/package_release_evidence.py|scripts/package_notices.py)
         image=true ;;
       deny.toml) deps=true ;;
     esac
@@ -48,5 +51,5 @@ else
     if [[ ! -e "$path" ]]; then docs=true; fi
   done <"$changed_files"
 fi
-printf 'rust=%s\ndeps=%s\npython=%s\ndocs=%s\nimage=%s\n' \
-  "$rust" "$deps" "$python" "$docs" "$image" >>"${GITHUB_OUTPUT:?output file is required}"
+printf 'rust=%s\ndeps=%s\npython=%s\ndocs=%s\nimage=%s\npublish=%s\n' \
+  "$rust" "$deps" "$python" "$docs" "$image" "$publish" >>"${GITHUB_OUTPUT:?output file is required}"
