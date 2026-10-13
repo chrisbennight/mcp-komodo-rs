@@ -66,8 +66,9 @@ command, log, and webhook-secret content labeled sensitive; a stack that inherit
 its webhook secret reports `source: "inherited"` with `valueAvailable: false` and
 never fetches the shared value. `stacks.logs.tail` accepts 1-5000 lines and up to
 50 named services. Upstream response bodies are streamed into a two-mebibyte
-maximum before deserialization. Only allowlisted fields are represented in Rust,
-so unrequested upstream fields are discarded before they can reach MCP output.
+maximum before deserialization. Named typed models represent supported Core
+facts; normalization does not discard addresses, public keys, identity,
+or repository provenance based on presumed sensitivity.
 
 The typed configuration and content writes send only the fields they set through
 Komodo's partial `UpdateStack` (or `WriteStackFileContents`) — no read-modify-
@@ -91,11 +92,13 @@ that upstream behavior. See [the decisions](../DECISIONS.md) and the contracts b
 
 ## Read contract
 
-Ordinary status tools expose only resource ids, names, normalized state,
-derived health, counts, versions, timestamps, and update availability. A
-separately named sensitive read may expose bounded configuration or diagnostic
-content when its schema, annotations, gateway policy, and result handling make
-that disclosure explicit.
+Resource search and status tools retain their normalized health summaries and
+include `resource`, a typed Core list record with id, type, name, template flag,
+tags, and resource-specific `info`. Fields inside `resource` use Core's field
+names. Server facts include network addresses, public keys, region, alerts, and
+available statistics. Stack, deployment, build, and repository facts include
+placement, image, source, branch, and commit provenance. Fields introduced in
+newer Core releases are optional when older versions do not report them.
 
 Search inputs accept an optional 128-byte ASCII-case-insensitive substring, a bounded
 offset, and a positive limit. Results are sorted by normalized name and
@@ -127,8 +130,18 @@ operations report true or false. A target identifies a resource, not the caller
 that submitted an operation. See [reconciliation](reconciliation.md).
 `stacks.diagnostics` is a sensitive read that adds Docker status text, missing
 Compose file paths, per-service image and update signals, and deploy-vs-latest
-drift. Ordinary status responses continue to omit logs, commands, stdout,
-stderr, operator/user identity, commit data, and previous/current TOML snapshots.
+drift. Operation search and status preserve initiating user identity, version,
+commit data, and operation-specific data when Core supplies them. A list record may lack detail-only fields;
+use `operations.status` with its stable id for those facts. Resource target kinds
+remain open strings so new Core resource kinds retain their correlation. Command
+logs remain available through `operations.logs.read`. These named projections
+are semantic contracts, not disclosure policy.
+
+Configuration history delivery is being completed with the literal credential
+transfer capability: Core exports configured webhook tokens into history TOML.
+Ordinary documents must remain available, and actual credential values must
+cross outside model context. The current history response does not yet provide
+these documents.
 
 Governed sensitive reads expose bounded configuration and content through
 their own named tools rather than a raw proxy. `stacks.config.read` returns the

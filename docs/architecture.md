@@ -2,7 +2,7 @@
 
 ## Components and access profiles
 
-- `komodo-api` owns bounded HTTP transport and allowlisted upstream models.
+- `komodo-api` owns bounded HTTP transport and named typed upstream models.
 - `komodo-mcp` owns schemas, validation, dispatch, annotations, and the tool registry.
 - `komodo-server` owns process configuration, credentials, ingress authentication,
   stdio and Streamable HTTP, health checks, and catalog emission.
@@ -30,9 +30,11 @@ credential.
 bounds before choosing a read-only or administrative API client. `komodo-api`
 then sends one typed Komodo envelope over a proxy-free, redirect-free client.
 Responses are streaming-capped before deserialization and normalized into
-typed fields. Ordinary tools allowlist non-sensitive status fields; separately
-governed tools may return bounded sensitive content with result trust
-annotations. The caller receives `structuredContent` with the JSON text
+typed fields. Resource search and status retain normalized health summaries
+alongside complete typed list facts in `resource`; operation metadata retains
+identity and provenance reported by Core. Operators
+own disclosure and authorization policy outside the library. The caller receives
+`structuredContent` with the JSON text
 compatibility representation supplied by the MCP library.
 
 ## Network boundary
