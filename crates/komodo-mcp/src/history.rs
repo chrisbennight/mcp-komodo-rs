@@ -274,7 +274,14 @@ fn project_uri_components(original: &str, kind: Option<&str>) -> Option<String> 
 }
 
 fn project_endpoint_path(path: &str, kind: Option<&str>) -> Option<String> {
-    let mut parts = path.split('/').collect::<Vec<_>>();
+    if !matches!(kind, Some("Slack" | "Discord")) {
+        return None;
+    }
+    // Interpret dot segments with the standard parser independently of the
+    // endpoint authority, which may have an invalid host or port.
+    let mut normalized = Url::parse("https://endpoint.invalid/").expect("fixed parsing base");
+    normalized.set_path(path);
+    let mut parts = normalized.path().split('/').collect::<Vec<_>>();
     let credential_index = match kind {
         Some("Slack") => parts
             .iter()
@@ -524,6 +531,41 @@ mod tests {
             let result = PreparedDocument::parse(source.clone()).unwrap();
             assert_eq!(result.toml, source);
             assert!(result.original.is_none());
+        }
+    }
+
+    #[test]
+    fn webhook_credentials_follow_standard_path_normalization() {
+        for (kind, url, ordinary) in [
+            (
+                "Slack",
+                "https://hooks.slack.com/services/../services/TPUBLIC/BPUBLIC/synthetic-token?wait=true",
+                "/services/TPUBLIC/BPUBLIC/",
+            ),
+            (
+                "Slack",
+                "https://operator:synthetic-password@hooks.slack.com:bad/services/%2e%2e/services/TPUBLIC%2FNAME/BPUBLIC%20NAME/synthetic-token?wait=true",
+                "/services/TPUBLIC%2FNAME/BPUBLIC%20NAME/",
+            ),
+            (
+                "Discord",
+                "https://discord.com/api/webhooks/../webhooks/public-id/synthetic-token?thread_id=42",
+                "/api/webhooks/public-id/",
+            ),
+            (
+                "Discord",
+                "//discord.com:bad/api/%2e/webhooks/old-id/%2E%2E/public-id/synthetic-token?next=https://docs.example.test",
+                "/api/webhooks/public-id/",
+            ),
+        ] {
+            let source = format!(
+                "[[alerter]]\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
+            );
+            let result = PreparedDocument::parse(source.clone()).unwrap();
+            assert!(!result.toml.contains("synthetic-token"));
+            assert!(!result.toml.contains("synthetic-password"));
+            assert!(result.toml.contains(ordinary));
+            assert_eq!(*result.original.unwrap(), source.into_bytes());
         }
     }
 

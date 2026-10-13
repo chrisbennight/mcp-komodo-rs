@@ -6,8 +6,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CollectionPage, CollectionWindow, KomodoMcp, McpError, api_error, collection_page, parse,
-    select, structured, validate_query, validate_selector,
+    CollectionPage, CollectionWindow, KomodoMcp, McpError, collection_page, parse, select,
+    structured, validate_query, validate_selector,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -75,8 +75,18 @@ impl KomodoMcp {
         validate_selector(&input.server)?;
         input.window.validate()?;
         let query = validate_query(input.query.as_deref())?;
-        let server = select(self.read.servers().await.map_err(api_error)?, &input.server)?;
-        let mut items = self.read.networks(&server.id).await.map_err(api_error)?;
+        let server = select(
+            self.read
+                .servers()
+                .await
+                .map_err(|error| self.api_error(error))?,
+            &input.server,
+        )?;
+        let mut items = self
+            .read
+            .networks(&server.id)
+            .await
+            .map_err(|error| self.api_error(error))?;
         if let Some(query) = query {
             items.retain(|item| {
                 [&item.name, &item.id].into_iter().any(|field| {
@@ -118,12 +128,18 @@ impl KomodoMcp {
         let input = parse::<ReadInput>(params)?;
         validate_selector(&input.server)?;
         validate_selector(&input.network)?;
-        let server = select(self.read.servers().await.map_err(api_error)?, &input.server)?;
+        let server = select(
+            self.read
+                .servers()
+                .await
+                .map_err(|error| self.api_error(error))?,
+            &input.server,
+        )?;
         let network = self
             .read
             .network(&server.id, &input.network)
             .await
-            .map_err(api_error)?;
+            .map_err(|error| self.api_error(error))?;
         structured(ReadOutput {
             server: ServerIdentity {
                 id: server.id,
