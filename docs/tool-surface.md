@@ -24,7 +24,7 @@ Read-only tools:
 
 Additional read-only tools for stack configuration and content:
 
-- `stacks.config.read` — configuration shape and presence flags, no raw payloads;
+- `stacks.config.read` — complete ordinary configuration and a compatibility summary;
 - `stacks.compose.read` — Compose contents for a configured, latest, or deployed source;
 - `stacks.environment.read` and `stacks.commands.read`;
 - `stacks.webhook.secret.read`;
@@ -136,13 +136,22 @@ Ordinary documents must remain available, and actual credential values must
 cross outside model context. The current history response does not yet provide
 these documents.
 
-Content reads expose bounded configuration and content through
-their own named tools rather than a raw proxy. `stacks.config.read` returns the
-configuration shape — file mode, run directory, file paths, env-file path,
-webhook flags, and presence flags — without raw Compose, environment, commands,
-or the webhook secret. `stacks.compose.read` returns Compose files for a
-configured, latest, or deployed source. `stacks.environment.read` and
-`stacks.commands.read` return the raw environment and pre/post-deploy commands.
+Content reads expose typed configuration and content under the bounded upstream
+response limit. `stacks.config.read` retains its summary and adds `configuration`
+with Core's ordinary configuration fields, including placement, repository and
+account references, update settings, file dependencies, command wrappers, inline
+Compose, environment text, and pre/post-deploy commands. The nested object uses
+Core's snake_case field names. Newly supported fields are null when absent upstream;
+reported false, empty text, and empty lists remain distinct from absence. The literal
+`webhook_secret` field is excluded from this object and is reachable through its
+native-file tool. No content scanner classifies configuration text as a credential.
+`stacks.compose.read` returns a page of configured, latest, or deployed files, plus
+`provenance` containing cached and deployed project, commit, service, resolved
+Compose configuration, missing-file, and remote-error facts. Remote file records
+also retain their service dependencies and required action. `stacks.environment.read`
+and `stacks.commands.read` return environment text and pre/post-deploy commands;
+commands retain Core's shell-mode setting. Command writes accept optional
+`shell_mode`; omitting it uses Core's default for the replacement command.
 `stacks.webhook.status` reports whether the webhook is enabled, whether it forces
 deploy, and whether its secret is custom or inherited. `stacks.webhook.secret.read`
 returns native file metadata for a custom token; a stack that inherits Komodo Core's shared secret

@@ -10,6 +10,8 @@ use thiserror::Error;
 use url::{Host, Url};
 use zeroize::Zeroizing;
 
+pub mod stacks;
+
 const MAXIMUM_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAXIMUM_TIMEOUT: Duration = Duration::from_mins(2);
 
@@ -425,12 +427,15 @@ where
 }
 
 /// A Komodo pre/post-deploy command.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct SystemCommand {
     #[serde(default)]
     pub path: String,
     #[serde(default)]
     pub command: String,
+    /// Whether Core executes the command using its shell mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_mode: Option<bool>,
 }
 
 /// A partial `UpdateStack` configuration: only the set fields are serialized, so
@@ -469,11 +474,12 @@ pub struct StackConfigPatch {
 #[derive(Debug, Deserialize)]
 struct WriteAck {}
 
-/// Bounded stack configuration from `GetStack`. Raw Compose, environment,
-/// commands, and the webhook secret are read through their own governed tools;
-/// callers that only need config shape do not receive those payloads here.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+/// Typed stack configuration from `GetStack`. The literal webhook token has a
+/// dedicated native-file read; all ordinary configuration is serializable.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct StackConfigDetail {
+    #[serde(flatten)]
+    pub facts: stacks::StackConfigurationFacts,
     #[serde(default)]
     pub file_contents: String,
     #[serde(default)]
@@ -492,24 +498,31 @@ pub struct StackConfigDetail {
     pub post_deploy: SystemCommand,
     #[serde(default)]
     pub webhook_enabled: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
     pub webhook_secret: String,
     #[serde(default)]
     pub webhook_force_deploy: bool,
 }
 
 /// One Compose or additional file: its path and full contents.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct ComposeFile {
     #[serde(default)]
     pub path: String,
     #[serde(default)]
     pub contents: String,
+    /// Services depending on a remote file; null when Core did not report it.
+    pub services: Option<Vec<String>>,
+    /// Core's required action when the remote file changes.
+    pub requires: Option<String>,
 }
 
 /// Deployed and latest Compose content exposed by `GetStack`'s stack info.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct StackComposeInfo {
+    #[serde(flatten)]
+    pub provenance: stacks::StackComposeProvenance,
     #[serde(default)]
     pub deployed_contents: Option<Vec<ComposeFile>>,
     #[serde(default)]
@@ -1256,11 +1269,14 @@ mod tests {
                     "run_directory": "stacks/gateway",
                     "file_paths": ["compose.yaml"],
                     "env_file_path": ".env",
-                    "pre_deploy": { "path": "stacks/gateway", "command": "echo pre" },
+                    "pre_deploy": { "path": "stacks/gateway", "command": "echo pre", "shell_mode": true },
                     "post_deploy": { "path": "", "command": "" },
                     "webhook_enabled": true,
                     "webhook_secret": "sentinel-hook",
-                    "webhook_force_deploy": false
+                    "webhook_force_deploy": false,
+                    "auto_pull": false,
+                    "repo": "operator/services",
+                    "registry_account": "registry-reference"
                 },
                 "info": {
                     "deployed_contents": [{ "path": "compose.yaml", "contents": "deployed" }],
@@ -1283,14 +1299,58 @@ mod tests {
         assert_eq!(detail.config.run_directory, "stacks/gateway");
         assert_eq!(detail.config.webhook_secret, "sentinel-hook");
         assert_eq!(detail.config.pre_deploy.command, "echo pre");
+        assert_eq!(detail.config.pre_deploy.shell_mode, Some(true));
+        assert_eq!(detail.config.facts.auto_pull, Some(false));
+        assert_eq!(
+            detail.config.facts.repo.as_deref(),
+            Some("operator/services")
+        );
+        assert_eq!(
+            detail.config.facts.registry_account.as_deref(),
+            Some("registry-reference")
+        );
         assert_eq!(
             detail.info.deployed_contents.expect("deployed")[0].contents,
             "deployed"
         );
-        assert_eq!(
-            detail.info.remote_contents.expect("remote")[0].contents,
-            "latest"
-        );
+        let remote = detail.info.remote_contents.expect("remote");
+        assert_eq!(remote[0].contents, "latest");
+        assert_eq!(remote[0].services.as_ref().unwrap(), &["api"]);
+        assert_eq!(remote[0].requires.as_deref(), Some("Redeploy"));
+    }
+
+    #[tokio::test]
+    async fn command_replacements_preserve_explicit_shell_mode_and_core_defaults() {
+        for shell_mode in [Some(true), Some(false), None] {
+            let server = MockServer::start().await;
+            let mut command = json!({"path":"stacks/api", "command":"printf data"});
+            if let Some(value) = shell_mode {
+                command["shell_mode"] = json!(value);
+            }
+            Mock::given(method("POST"))
+                .and(path("/write"))
+                .and(body_json(json!({"type":"UpdateStack","params":{
+                    "id":"stack-1", "config":{"pre_deploy":command}
+                }})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+                .expect(1)
+                .mount(&server)
+                .await;
+            client(&server)
+                .update_stack(
+                    "stack-1",
+                    &StackConfigPatch {
+                        pre_deploy: Some(SystemCommand {
+                            path: "stacks/api".into(),
+                            command: "printf data".into(),
+                            shell_mode,
+                        }),
+                        ..StackConfigPatch::default()
+                    },
+                )
+                .await
+                .expect("typed command replacement");
+        }
     }
 
     #[tokio::test]
@@ -1499,6 +1559,7 @@ mod tests {
             pre_deploy: Some(SystemCommand {
                 path: String::new(),
                 command: "echo hi".into(),
+                shell_mode: None,
             }),
             ..StackConfigPatch::default()
         };

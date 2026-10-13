@@ -7,6 +7,12 @@ Resource and operation metadata models also cover the fields defined by
 including server statistics and resource placement names. This source comparison
 and loopback evidence do not certify a live deployment.
 
+Stack configuration and Compose provenance cover the ordinary fields in the
+[Core 2.3.3 stack model](https://github.com/moghtech/komodo/blob/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/client/core/rs/src/entities/stack.rs).
+Missing newly supported fields remain null. Command reads and writes preserve
+the upstream `SystemCommand.shell_mode` setting. The dedicated webhook-token
+operation continues to use native file transfer.
+
 The client sends the documented envelope form to `/read`, `/write`, and
 `/execute`, using the request variant in `type` and typed arguments in `params`.
 Reads and typed writes (`UpdateStack`, `WriteStackFileContents`) go to `/read`
