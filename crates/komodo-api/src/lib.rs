@@ -1,10 +1,11 @@
 //! Bounded, typed access to the Komodo Core API.
 
+pub mod errors;
 pub mod networks;
 
 use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use reqwest::{Client as HttpClient, StatusCode, redirect::Policy};
+use reqwest::{Client as HttpClient, redirect::Policy};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -63,9 +64,12 @@ fn validate_secret(label: &'static str, value: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// A safe error vocabulary that never includes upstream response bodies.
+/// Local failures and typed upstream diagnostics. Display and Debug never
+/// contain response values; callers obtain ordinary diagnostic facts separately.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ApiError {
+    #[error("{0}")]
+    Upstream(Box<errors::UpstreamFailure>),
     #[error("invalid Komodo client configuration: {0}")]
     InvalidConfiguration(&'static str),
     #[error("Komodo authentication failed")]
@@ -541,7 +545,7 @@ pub struct StackDetail {
 }
 
 /// One command-execution log record. Its content is caller-sensitive and
-/// untrusted, and must never reach MCP or gateway logs, errors, or metrics.
+/// untrusted, and must never reach MCP or gateway logs or metrics.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct Log {
     #[serde(default)]
@@ -698,7 +702,11 @@ impl Client {
         retry_read: bool,
     ) -> Result<T, ApiError> {
         match self.post_once(family, variant, &params).await {
-            Err(ApiError::Unavailable) if retry_read => {
+            Err(error)
+                if retry_read
+                    && (matches!(&error, ApiError::Unavailable)
+                        || matches!(&error, ApiError::Upstream(failure) if matches!(failure.status, 500..=599))) =>
+            {
                 self.post_once(family, variant, &params).await
             }
             result => result,
@@ -725,21 +733,35 @@ impl Client {
             .await
             .map_err(|_| ApiError::Unavailable)?;
 
-        match response.status() {
-            status if status.is_success() => {}
-            StatusCode::UNAUTHORIZED => return Err(ApiError::Authentication),
-            StatusCode::FORBIDDEN => return Err(ApiError::Forbidden),
-            StatusCode::NOT_FOUND => return Err(ApiError::NotFound),
-            status if status.is_server_error() => return Err(ApiError::Unavailable),
-            _ => return Err(ApiError::IncompatibleResponse),
-        }
-
+        let status = response.status();
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|_| ApiError::Unavailable)? {
             if bytes.len().saturating_add(chunk.len()) > MAXIMUM_RESPONSE_BYTES {
                 return Err(ApiError::ResponseTooLarge);
             }
             bytes.extend_from_slice(&chunk);
+        }
+        if !status.is_success() {
+            let mut credentials = vec![
+                self.credentials.key.as_str(),
+                self.credentials.secret.as_str(),
+            ];
+            if variant == "UpdateStack"
+                && let Some(token) = params
+                    .get("config")
+                    .and_then(|config| config.get("webhook_secret"))
+                    .and_then(Value::as_str)
+            {
+                credentials.push(token);
+            }
+            return Err(ApiError::Upstream(Box::new(
+                errors::UpstreamFailure::from_response(
+                    status.as_u16(),
+                    variant,
+                    bytes,
+                    &credentials,
+                ),
+            )));
         }
         serde_json::from_slice(&bytes).map_err(|_| ApiError::IncompatibleResponse)
     }
@@ -1601,13 +1623,13 @@ mod tests {
             }),
             ..StackConfigPatch::default()
         };
-        assert_eq!(
+        assert!(matches!(
             client(&server)
                 .update_stack("stack-1", &patch)
                 .await
                 .expect_err("unavailable write"),
-            ApiError::Unavailable
-        );
+            ApiError::Upstream(failure) if failure.status == 503 && failure.request == "UpdateStack"
+        ));
     }
 
     #[tokio::test]
@@ -1621,13 +1643,13 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            assert_eq!(
+            assert!(matches!(
                 client(&server)
                     .execute(action, "gateway")
                     .await
                     .expect_err("unavailable mutation"),
-                ApiError::Unavailable
-            );
+                ApiError::Upstream(failure) if failure.status == 503
+            ));
         }
     }
 
@@ -1759,14 +1781,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_status_and_body_failures_map_to_the_safe_vocabulary() {
-        for (status, expected, expected_calls) in [
-            (401, ApiError::Authentication, 1),
-            (403, ApiError::Forbidden, 1),
-            (404, ApiError::NotFound, 1),
-            (409, ApiError::IncompatibleResponse, 1),
-            (500, ApiError::Unavailable, 2),
-        ] {
+    async fn response_failures_preserve_status_named_request_and_bounded_diagnostics() {
+        for (status, expected_calls) in [(401, 1), (403, 1), (404, 1), (409, 1), (500, 2)] {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
                 .and(path("/read"))
@@ -1777,8 +1793,17 @@ mod tests {
                 .mount(&server)
                 .await;
             let error = client(&server).version().await.expect_err("safe error");
-            assert_eq!(error, expected);
             assert!(!error.to_string().contains("SENTINEL"));
+            let ApiError::Upstream(mut failure) = error else {
+                panic!("typed upstream failure")
+            };
+            assert_eq!(failure.status, status);
+            assert_eq!(failure.request, "GetVersion");
+            assert_eq!(
+                failure.diagnostic.as_ref().unwrap().error,
+                "SENTINEL_UPSTREAM_BODY"
+            );
+            assert!(failure.take_credential_document().is_none());
         }
 
         let invalid_json = MockServer::start().await;

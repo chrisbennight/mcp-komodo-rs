@@ -21,6 +21,12 @@ unparseable version fails explicitly. Loopback tests verify both release forms
 and the fields in the
 [Core 2.3.3 network model](https://github.com/moghtech/komodo/blob/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/client/core/rs/src/entities/docker/network.rs).
 
+Core uses `mogh_error` 1.0.4 for HTTP failures. Its
+[`Serror` source](https://docs.rs/mogh_error/1.0.4/src/mogh_error/serror.rs.html)
+defines the `error` and `trace` diagnostic fields retained by this adapter. HTTP
+status and the named request accompany those fields. UTF-8 non-JSON failures are
+represented as diagnostic text under the same upstream response bound.
+
 The client sends the documented envelope form to `/read`, `/write`, and
 `/execute`, using the request variant in `type` and typed arguments in `params`.
 Reads and typed writes (`UpdateStack`, `WriteStackFileContents`) go to `/read`

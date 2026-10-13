@@ -18,6 +18,7 @@ const UPSTREAM_ERROR: &str = "synthetic-upstream-error-sentinel";
 const CLIENT: &str = "synthetic-client-log-sentinel";
 const URI_MARKER: &str = "synthetic-uri-log-sentinel";
 const TOKEN: &str = "synthetic-webhook-token-sentinel";
+const FAILED_TOKEN: &str = "synthetic-rejected-token-sentinel";
 
 fn capture(reader: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> JoinHandle<Vec<u8>> {
     tokio::spawn(async move {
@@ -33,6 +34,17 @@ fn capture(reader: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> JoinHa
 
 async fn fake_upstream() -> (MockServer, String) {
     let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            json!({"type":"UpdateStack","params":{"config":{"webhook_secret":FAILED_TOKEN}}}),
+        ))
+        .respond_with(ResponseTemplate::new(503).set_body_json(json!({
+            "error":format!("Cannot store webhook token {FAILED_TOKEN}"),
+            "trace":["Core storage unavailable at 10.20.0.1"]
+        })))
+        .with_priority(1)
+        .mount(&upstream)
+        .await;
     let signing = SigningKey::from_bytes(&[7; 32]);
     Mock::given(method("GET"))
         .and(path("/jwks"))
@@ -149,7 +161,16 @@ async fn exercise_tools(client: &reqwest::Client, url: &str, identity: &str) {
     )
     .await;
     assert!(failure["error"].is_object());
-    assert!(!failure.to_string().contains(UPSTREAM_ERROR));
+    assert_eq!(
+        failure["error"]["data"]["upstream"]["diagnostic"]["error"],
+        UPSTREAM_ERROR
+    );
+    assert_eq!(failure["error"]["data"]["upstream"]["httpStatus"], 500);
+    assert_eq!(
+        failure["error"]["data"]["upstream"]["request"],
+        "GetVersion"
+    );
+    assert_eq!(failure["error"]["data"]["upstream"]["untrusted"], true);
 }
 
 async fn exercise_files(client: &reqwest::Client, url: &str, identity: &str) -> Vec<String> {
@@ -221,7 +242,90 @@ async fn exercise_files(client: &reqwest::Client, url: &str, identity: &str) -> 
         .unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(response.text().await.unwrap(), TOKEN);
-    vec![grant.to_owned(), download_grant.to_owned()]
+    let mut grants = vec![grant.to_owned(), download_grant.to_owned()];
+    grants.extend(exercise_credential_failure(client, url, identity, meta).await);
+    grants
+}
+
+async fn exercise_credential_failure(
+    client: &reqwest::Client,
+    url: &str,
+    identity: &str,
+    meta: Value,
+) -> Vec<String> {
+    let mut grants = Vec::new();
+    let failed_upload = request(
+        client,
+        url,
+        identity,
+        "files/authorizeUpload",
+        json!({"_meta":meta,"name":"rejected-token.txt","mimeType":"text/plain"}),
+    )
+    .await;
+    let failed_grant = failed_upload["result"]["upload"]["headers"]["Authorization"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        client
+            .put(failed_upload["result"]["upload"]["url"].as_str().unwrap())
+            .header("authorization", failed_grant)
+            .body(FAILED_TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
+    grants.push(failed_grant.to_owned());
+    let failure = request(
+        client,
+        url,
+        identity,
+        "tools/call",
+        json!({
+            "name":"stacks.webhook.secret.write", "arguments":{"selector":RESOURCE,
+                "secret":{"source":"custom","file":failed_upload["result"]["file"]}}
+        }),
+    )
+    .await;
+    assert!(!failure.to_string().contains(FAILED_TOKEN));
+    let detail = &failure["error"]["data"];
+    assert_eq!(detail["outcome"], "unknown");
+    assert_eq!(detail["retrySafe"], false);
+    assert_eq!(detail["reconcileWith"], "stacks.webhook.secret.read");
+    assert_eq!(detail["upstream"]["httpStatus"], 503);
+    assert_eq!(
+        detail["upstream"]["diagnostic"]["trace"][0],
+        "Core storage unavailable at 10.20.0.1"
+    );
+    assert_eq!(detail["upstream"]["credentialValuesPresent"], true);
+    let original = request(
+        client,
+        url,
+        identity,
+        "files/authorizeDownload",
+        json!({"_meta":meta,"uri":detail["upstream"]["diagnosticFile"]["uri"]}),
+    )
+    .await;
+    let original_grant = original["result"]["download"]["headers"]["Authorization"]
+        .as_str()
+        .unwrap();
+    let body = client
+        .get(original["result"]["download"]["url"].as_str().unwrap())
+        .header("authorization", original_grant)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(body.status(), 200);
+    assert_eq!(
+        body.json::<Value>().await.unwrap(),
+        json!({
+            "error":format!("Cannot store webhook token {FAILED_TOKEN}"),
+            "trace":["Core storage unavailable at 10.20.0.1"]
+        })
+    );
+    grants.push(original_grant.to_owned());
+    grants
 }
 
 fn assert_diagnostics(bytes: &[u8], filter: &str, identity: &str) {
@@ -235,6 +339,7 @@ fn assert_diagnostics(bytes: &[u8], filter: &str, identity: &str) {
         CLIENT,
         URI_MARKER,
         TOKEN,
+        FAILED_TOKEN,
         "synthetic-read-secret",
         "synthetic-admin-secret",
         identity,
