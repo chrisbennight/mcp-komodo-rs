@@ -2328,19 +2328,17 @@ fn api_error(error: ApiError) -> McpError {
 // guidance. Never include submitted configuration, paths, commands or secrets.
 fn mutation_error(error: ApiError, target: &str, read_tool: &'static str) -> McpError {
     match error {
-        ApiError::Unavailable | ApiError::IncompatibleResponse | ApiError::ResponseTooLarge => {
-            McpError::internal_error(
-                "Komodo mutation outcome is unknown; reconcile before any new write",
-                Some(serde_json::json!({
-                    "outcome": "unknown",
-                    "target": target,
-                    "retrySafe": false,
-                    "operationIdAvailable": false,
-                    "reconcileWith": read_tool,
-                    "operatorVerificationRequired": true
-                })),
-            )
-        }
+        error if error.mutation_outcome_unknown() => McpError::internal_error(
+            "Komodo mutation outcome is unknown; reconcile before any new write",
+            Some(serde_json::json!({
+                "outcome": "unknown",
+                "target": target,
+                "retrySafe": false,
+                "operationIdAvailable": false,
+                "reconcileWith": read_tool,
+                "operatorVerificationRequired": true
+            })),
+        ),
         other => api_error(other),
     }
 }
@@ -2351,7 +2349,9 @@ fn mutation_error(error: ApiError, target: &str, read_tool: &'static str) -> Mcp
 #[allow(clippy::needless_pass_by_value)]
 fn operation_lookup_error(error: ApiError) -> McpError {
     match error {
-        ApiError::NotFound => McpError::invalid_params("operation not found", None),
+        error if error.resource_not_found() => {
+            McpError::invalid_params("operation not found", None)
+        }
         other => api_error(other),
     }
 }
