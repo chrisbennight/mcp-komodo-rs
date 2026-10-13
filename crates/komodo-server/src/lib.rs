@@ -11,8 +11,8 @@ pub mod stdio;
 use komodo_mcp::{KomodoMcp, ToolProfile};
 
 /// Render a gateway connection scaffold containing the selected tool identities.
-/// The operator must supply risk and approval policy and approve behavior hashes
-/// from the gateway preview before publishing it.
+/// The operator selects classification authority and supplies authorization,
+/// disclosure, risk, and approval policy through the gateway control plane.
 #[must_use]
 pub fn gateway_manifest() -> String {
     gateway_manifest_for_profile(ToolProfile::Full)
@@ -24,9 +24,9 @@ pub fn gateway_manifest_for_profile(profile: ToolProfile) -> String {
     let catalog = KomodoMcp::list_tools_for_profile(profile);
     let mut output = String::from(
         "# Incomplete connection scaffold: operator policy is required.\n\
-         # Supply each tool's risk and approved_behavior_hash from the gateway\n\
-         # preview, and configure authorization, disclosure, and approvals.\n\
-         name: komodo\ntransport: http\nurl: http://komodo-mcp:8000/mcp\nclassification_mode: mcp_annotations\nauth:\n  bearer_env: MCP_GATEWAY_UPSTREAM_BEARER_KOMODO\nsession:\n  isolation: per_call\ntools:\n",
+         # Select classification authority and configure authorization,\n\
+         # disclosure, risk, and approvals in the gateway control plane.\n\
+         name: komodo\ntransport: http\nurl: http://komodo-mcp:8000/mcp\nauth:\n  bearer_env: MCP_GATEWAY_UPSTREAM_BEARER_KOMODO\nsession:\n  isolation: per_call\ntools:\n",
     );
     for tool in catalog.tools {
         output.push_str("  - name: ");
@@ -88,6 +88,9 @@ mod tests {
     fn manifest_requires_operator_policy_without_selecting_it() {
         let manifest = gateway_manifest();
         assert!(manifest.contains("operator policy is required"));
+        for field in ["classification_mode", "approval_mode"] {
+            assert!(!manifest.contains(&format!("\n{field}:")));
+        }
         for field in [
             "risk",
             "side_effects",
@@ -113,7 +116,6 @@ mod tests {
                 .map(|spec| spec.name)
                 .collect::<Vec<_>>()
         );
-        assert!(manifest.contains("classification_mode: mcp_annotations"));
         assert!(manifest.contains("auth:\n  bearer_env: MCP_GATEWAY_UPSTREAM_BEARER_KOMODO"));
         assert!(manifest.contains("isolation: per_call"));
     }
