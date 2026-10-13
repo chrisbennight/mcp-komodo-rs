@@ -4,34 +4,39 @@
 
 The MCP surface owns named operations with exact input and output schemas. It
 does not accept a Komodo endpoint, request variant, query document, or arbitrary
-JSON. This improves discovery and makes the information-flow and authorization
-contract reviewable per tool.
+JSON. This improves discovery and makes operational meaning and information
+flow reviewable per tool.
 
 ## Separate read and administrative identities
 
 In the HTTP profile, each handler uses the read or administrative Komodo client.
 Read tools cannot gain mutation authority; mutations cannot fall back to the
-read credential. Local stdio constructs only a read client and rejects sensitive
-and mutating tools. Credentials arrive through the process environment at startup. Operators may use any secret provider that can supply
-that environment; the server has no Infisical dependency or credential-file
-interface.
+read credential. Credential availability should reflect an operation's upstream
+authority rather than a judgment about the sensitivity of its result. Process
+credentials arrive through the environment at startup. Operators may use any
+secret provider that supplies that environment; the server has no Infisical
+dependency.
 
-## Governed sensitive capabilities
+## Semantic capability and external policy
 
-Configuration, Compose, environment, logs, commands, and secrets are sensitive
-data, but sensitivity alone is not a design reason to remove a capability.
-Bounded typed tools can expose these values when their annotations make the
-information flow explicit and the gateway authorizes the caller and disclosure.
+The library describes named operations, their factual effects, and upstream
+facts. The operator's gateway owns access, disclosure, risk, approval, and role
+policy. Ordinary configuration, logs, Compose, environment content, command
+descriptions, network addresses, paths, public keys, and resource metadata do
+not acquire a blanket secret classification from this library.
 
-Sensitive tools require:
+Typed contracts, input validation, authentication, appropriate upstream
+credentials, cancellation, and bounded request costs protect runtime integrity.
+They do not justify silently discarding supported facts or imposing categorical
+capability bans. An unsupported upstream operation is a coverage question;
+presumed sensitivity is not an architectural prohibition.
 
-- a narrow input and output schema with explicit bounds;
-- accurate behavior, input-sensitivity, and result trust annotations;
-- gateway-owned risk, role, and approval policy;
-- tests proving values do not enter MCP or gateway telemetry and audit records;
-  and
-- a disclosure when Komodo may retain submitted values in its own traces or
-  operation history.
+Credential values are actual passwords, tokens, API keys, or equivalent
+authentication material. Those values require governed file transfer outside
+model context in both directions. Preserve credential operations and metadata
+such as identifiers, references, source, and existence. Document upstream
+Komodo retention accurately. Avoid speculative scanning of ordinary documents
+for hypothetical credentials.
 
 Generic create/update/delete remains excluded because an arbitrary resource
 payload is not a reviewable intent. Stack configuration writes use Komodo's
@@ -41,31 +46,23 @@ Komodo supplies no atomic revision precondition, same-field concurrent writes
 are documented as last-writer-wins rather than hidden behind a racy client-side
 check.
 
-## Status reads minimize exposure
+## Summaries preserve access to facts
 
-Ordinary status tools use minimal list or stable single-operation endpoints.
-Full-resource and log endpoints are reserved for separately named sensitive
-tools whose policy and result handling reflect the additional exposure. Docker
-inspect endpoints remain outside the contract.
-
-## Gateway policy is deny-by-default for mutations
-
-Read-only low-risk tools use the authenticated-user baseline. Side-effecting
-tools require `komodo-admin`, and an explicit Cedar forbid denies those tools to
-every principal lacking that group. This remains true even if another policy
-grants a broad administrator role.
+Compact status views and caller-selected searches or projections can make
+operational work easier. Supported facts omitted from a summary should remain
+available through an appropriate typed view. Resource limits bound each request
+and preserve useful continuation rather than limiting which records can ever
+be reached. Errors preserve actionable non-credential information.
 
 ## MCP annotations describe behavior; the gateway owns policy
 
-Standard MCP annotations and the experimental action-metadata extension
-draft (published under the official MCP extensions organization) describe
-read-only behavior, idempotency, destructive or consequential outcomes, input
-destinations, and review requirements. Result trust annotations describe
-sensitive and untrusted output. These values are claims for the gateway to
-validate and enforce, not authorization decisions.
+MCP annotations describe factual behavior such as read-only operation,
+idempotency, destructiveness, and interaction with external systems. Upstream
+content remains untrusted data. These descriptions support an operator's policy
+without assigning risk tiers, PII judgments, approval requirements, or local
+role names. Catalog validation should detect semantic and schema drift while
+allowing legitimate operator policy differences.
 
-The gateway catalog remains authoritative for risk because risk depends on the
-deployment, caller, target, and policy environment. The legacy
-`side_effects` manifest field is replaced by MCP behavior annotations for this
-server. The legacy `pii` field is replaced by result-level sensitive and
-untrusted annotations instead of a new custom data taxonomy.
+Production connection settings, gateway manifests, and applied policy belong
+in operator-owned deployment repositories or control planes. This repository
+owns application source, image publication, and tests of its semantic contract.

@@ -20,14 +20,14 @@ What this change achieves and why.
 
 ### What changed and why
 
-Describe the code, schema, normalization, policy classification, and
+Describe the code, schema, normalization, factual operation annotations, and
 documentation changes.
 
 ### Security and information flow
 
 Describe caller authentication, gateway authorization, read/admin credential
-selection, upstream requests, model-visible fields, and excluded sensitive
-fields.
+selection, upstream requests, model-visible facts, credential-transfer boundaries,
+and externally owned policy dependencies.
 
 ### Upstream assumptions
 
@@ -37,13 +37,13 @@ Record the targeted Komodo release and primary upstream references.
 
 ### Secrets and exposure
 
-Explain changes to secrets, configuration/log/runtime-data exposure, PII, or
-network reachability.
+Explain changes to literal credential handling, information availability,
+external policy dependencies, or network reachability.
 
 ### Mutation semantics
 
-Explain validation, idempotency, retry behavior, ambiguous outcomes, and the
-`komodo-admin` gate. State `Not applicable` for read-only changes.
+Explain validation, idempotency, retry behavior, ambiguous outcomes, and relevant
+external authorization requirements. State `Not applicable` for read-only changes.
 
 ### Open questions
 
