@@ -4,8 +4,8 @@ For uncertain write results, use the
 [operation-specific reconciliation guide](reconciliation.md). Metadata exports
 describe the tools; operators configure gateway authorization, disclosure,
 and approval policy separately. The [architectural decisions](../DECISIONS.md)
-define ownership. Sensitivity and review labels described below reflect the
-current implementation being refactored; they are not library policy mandates.
+define ownership. The library publishes factual MCP behavior and does not assign
+risk, sensitivity, roles, or approval requirements.
 
 For smaller catalogs, on-demand schemas, and compatible result presentation, see
 [discovery efficiency](discovery-efficiency.md).
@@ -22,9 +22,7 @@ Read-only tools:
 - `repos.search` and `repos.status`; and
 - `operations.search` and `operations.status`.
 
-Governed reads over stack configuration and content (content-bearing results
-are labeled sensitive and untrusted; `stacks.webhook.status` returns only
-metadata and is not sensitive):
+Additional read-only tools for stack configuration and content:
 
 - `stacks.config.read` — configuration shape and presence flags, no raw payloads;
 - `stacks.compose.read` — Compose contents for a configured, latest, or deployed source;
@@ -60,9 +58,8 @@ resolves one operation by its stable id rather than a moving page (its former
 `page` argument is accepted but ignored for one release). `stacks.diagnostics`
 returns bounded operational signals — state, Docker status text, missing Compose
 file paths, and per-service image and update flags, with 250 entries per collection
-by default — and is classified sensitive so its results are labeled accordingly.
-The governed sensitive reads return bounded configuration, Compose, environment,
-command, and log content labeled sensitive. Custom webhook tokens use native
+by default. Content reads return bounded configuration, Compose, environment,
+commands, and logs as reported by Core. Custom webhook tokens use native
 file transfer outside model context; a stack that inherits
 its webhook secret reports `source: "inherited"` with `valueAvailable: false` and
 never fetches the shared value. `stacks.logs.tail` accepts 1-5000 lines and up to
@@ -75,21 +72,16 @@ The typed configuration and content writes send only the fields they set through
 Komodo's partial `UpdateStack` (or `WriteStackFileContents`) — no read-modify-
 write and no arbitrary JSON — validate their complete bounded input before the
 upstream call, and are never retried. They return the target, the applied field
-names, and any reconciliation id, never the submitted contents or secret. Writes
-that accept paths, content, or the webhook secret still classify their input
-sensitive in legacy MCP metadata; `stacks.webhook.update` toggles only flags and
-declares operational input. Risk is chosen by the operator outside the library.
-Komodo may retain a
-submitted payload in its own traces; that is disclosed at the approval boundary
-while MCP and gateway storage remain payload-free.
+names, and any reconciliation id, never the submitted contents or secret.
+Komodo may retain submitted configuration or credentials in its own traces or
+operation history. Tool descriptions disclose this upstream behavior.
 
 Generic create/update/delete is absent. Governed configuration changes use
 narrow partial-update tools rather than read-modify-write over full resource
-objects. Sensitive values may be model-visible when a caller explicitly invokes
-an authorized sensitive capability, but they must not be copied into MCP or
-gateway logs, errors, metrics, approval records, or audit payloads. Komodo may
-independently retain values submitted through its API; such tools must disclose
-that upstream behavior. See [the decisions](../DECISIONS.md) and the contracts below.
+objects. Ordinary metadata and content remain available through typed reads;
+the operator governs their disclosure. Literal credential values use native
+file transfer outside model context and must never appear in MCP diagnostics or
+approval records. See [the decisions](../DECISIONS.md) and the contracts below.
 
 ## Read contract
 
@@ -129,7 +121,7 @@ release). Both return id, operation kind, start timestamp, raw status, explicit
 Accepted/running/unknown operations have `success: null`; only completed
 operations report true or false. A target identifies a resource, not the caller
 that submitted an operation. See [reconciliation](reconciliation.md).
-`stacks.diagnostics` is a sensitive read that adds Docker status text, missing
+`stacks.diagnostics` adds Docker status text, missing
 Compose file paths, per-service image and update signals, and deploy-vs-latest
 drift. Operation search and status preserve initiating user identity, version,
 commit data, and operation-specific data when Core supplies them. A list record may lack detail-only fields;
@@ -144,7 +136,7 @@ Ordinary documents must remain available, and actual credential values must
 cross outside model context. The current history response does not yet provide
 these documents.
 
-Governed sensitive reads expose bounded configuration and content through
+Content reads expose bounded configuration and content through
 their own named tools rather than a raw proxy. `stacks.config.read` returns the
 configuration shape — file mode, run directory, file paths, env-file path,
 webhook flags, and presence flags — without raw Compose, environment, commands,
@@ -158,7 +150,7 @@ instead reports `source: "inherited"` with `valueAvailable: false` and no file,
 and the shared token is never fetched. `stacks.logs.tail` tails container logs
 (1-5000 lines, up to 50 named services) and `operations.logs.read` returns an
 operation's per-stage command logs. Per-file and per-record pages are bounded,
-and every content-bearing read labels its result `sensitive` and `untrusted`.
+and results mark Core-provided content as `untrusted` without classifying sensitivity.
 
 Literal token values use [native file transfer](file-transfers.md). Ordinary
 configuration, Compose, environment, commands, and logs retain their content
@@ -220,34 +212,33 @@ views answer different questions: desired input, the latest content observed by
 Core, and content associated with its deployed state. None substitutes for live
 application-health evidence.
 
-Before approval, present the target, affected fields, replacement or clearing
-intent, source-mode implications, later execution/deployment consequences, and
-the fact that Komodo may retain submitted content. Exclude values, secret
-hashes, raw commands, and content from approval and audit records. An upstream
-retention disclosure does not authorize retaining those values in MCP logs.
+The operator decides which changes require approval and what ordinary context
+its review presents. Relevant operation facts include the target, affected
+fields, replacement or clearing intent, source mode, later deployment effects,
+and upstream retention. Literal credential values must remain outside model
+context, approval records, and diagnostics.
 
 ### Validation and reconciliation
 
 Mutation tools accept one exact resource selector and an operation-specific
 typed intent. They do not accept arbitrary JSON, endpoint names, wildcard
 actions, or generic resource objects. The result is a minimal receipt suitable
-for later reconciliation and never echoes sensitive input.
+for later reconciliation and never echoes submitted configuration or credentials.
 
 Annotations are assigned from each operation's behavior instead of treating
 every mutation as destructive and non-idempotent. Operators own risk,
 authorization, disclosure, roles, and approval policy in their gateway. The
-current catalog includes review requests; they describe existing metadata and
-do not prescribe the operator's policy. Verify the deployment's chosen policy
-before enabling tools; metadata alone does not grant access or enforce approval.
+library does not request review or prescribe the operator's policy. Verify the
+deployment's chosen policy before enabling tools; metadata alone does not grant
+access or enforce approval.
 
 Mutation calls are never retried automatically. A transport failure does not
 prove that Komodo rejected the request.
 
 `stacks.stop` stops all services of an existing stack selected by exact name or
 id, preserving its containers. It uses Komodo's default termination timeout
-and returns an operation receipt. Its current metadata requests review because
-stopping services interrupts availability; operators decide applicable roles
-and approvals outside the library. Repeated
+and returns an operation receipt. Stopping services interrupts availability;
+operators decide applicable roles and approvals outside the library. Repeated
 stops have an idempotent stopping effect, but calls are never retried; reconcile
 an ambiguous outcome through `operations.search` and `operations.status` before
 deciding whether to submit another operation.
@@ -263,63 +254,40 @@ one file through `WriteStackFileContents`. They never perform a full-resource
 read-modify-write cycle, send only the fields they set, validate their complete
 bounded input before the upstream call, and return the target, applied field
 names, and any reconciliation id — never the submitted contents or secret.
-The gateway manifest scaffold contains no risk choices. Each write's legacy
-input sensitivity is declared through action-metadata, and
-only `stacks.file.write` labels its result sensitive because it echoes a path. Same-field concurrent updates are last-writer-wins when Komodo
+`stacks.file.write` includes the selected path in its receipt. Same-field
+concurrent updates are last-writer-wins when Komodo
 offers no revision precondition. Komodo may retain submitted configuration,
 content, commands, or secret values in its own traces or operation history;
-affected tool descriptions and approval prompts must disclose that upstream
-behavior.
+affected tool descriptions disclose that upstream behavior.
 
 ## Metadata ownership
 
-Standard MCP annotations and the experimental
-`io.modelcontextprotocol/action-metadata` namespace describe behavior and input
-sensitivity. The pinned Rust MCP type cannot retain extension members inside
-`ToolAnnotations`, so Komodo publishes that namespace through `Tool._meta`; the
-gateway normalizes it to the same reviewed contract.
+Standard MCP annotations describe whether an operation reads, destroys,
+is idempotent, or interacts with an open world. Current reads are read-only,
+non-destructive, idempotent, and closed-world. Mutation annotations reflect the
+specific operation:
 
-Current read tools are read-only, non-destructive, idempotent, closed-world,
-benign, and do not request review. Mutation metadata is operation-specific:
+| Operations | Destructive | Idempotent | Open world |
+|---|---:|---:|---:|
+| stack/deployment deploy, repository pull | yes | no | yes |
+| stack/deployment restart | no | no | no |
+| stack stop | yes | yes | no |
+| build run | no | no | yes |
+| build cancel | yes | yes | no |
+| stack config/content/file/webhook writes | yes | no | no |
 
-| Operations | Destructive | Idempotent | Open world | Requests review |
-|---|---:|---:|---:|---:|
-| stack/deployment deploy, repository pull | yes | no | yes | yes |
-| stack/deployment restart | no | no | no | no |
-| stack stop | yes | yes | no | yes |
-| build run | no | no | yes | no |
-| build cancel | yes | yes | no | yes |
-| stack config/content/file/webhook writes | yes | no | no | yes |
-
-All mutations have a consequential outcome. These are behavior claims, not
-gateway permissions; catalog-owned policy remains authoritative. Writes that
-accept paths, content, or the webhook secret declare sensitive input through
-`action-metadata`, so the gateway classifies their arguments accordingly;
-`stacks.webhook.update` toggles only flags and declares operational input.
-
-Result-level `io.modelcontextprotocol/trust-annotations` label sensitive and
-untrusted output. Most normalized results claim `sensitive: false` and
-`untrusted: true`: they exclude sensitive fields but still contain
-upstream-generated strings. A read that surfaces operator-sensitive signals
-claims `sensitive: true` instead — `stacks.diagnostics` does, because it returns
-missing-file paths and Docker status text — and its catalog entry carries the
-matching `pii` classification and `returnMetadata.sensitivity: "sensitive"`
-action metadata. The governed configuration, Compose, environment, command, log,
-and webhook-secret reads set the same labels rather than inheriting the default.
-The gateway treats annotations as claims, incorporates them into tool
-identity and drift checks, and applies catalog-owned risk, release, and
-authorization policy.
+The library publishes no action-metadata, risk, PII, sensitivity, review, or role
+claims. Result-level `io.modelcontextprotocol/trust-annotations` reports
+`untrusted: true` for Core-provided data. This is an origin trust fact, not a
+disclosure or authorization rule.
 
 `--emit-gateway-manifest` produces an incomplete connection and tool-name
-scaffold. It assigns no risk, sensitivity, roles, or approval requirements.
-The operator supplies risk and gateway-observed behavior hashes and chooses
-disclosure, roles, and approvals outside this repository.
-`--emit-gateway-contract-json` preserves standard MCP declarations and omits
-nonstandard action metadata for
+scaffold. The operator supplies risk and gateway-observed behavior hashes and
+chooses disclosure, roles, and approvals outside this repository.
+`--emit-gateway-contract-json` preserves standard MCP declarations for
 [deployment drift checks](gateway-setup.md#validate-deployed-catalog-coverage-and-declarations).
-Those checks compare schemas, descriptions, and factual behavior independently
-of operator policy. Legacy sensitivity and review claims remain in the MCP
-catalog pending the rest of the refactor; they are not imported policy floors.
+Those checks compare source-owned schemas, descriptions, and factual behavior;
+they do not impose operator policy or replace the gateway's reviewed admission.
 
 ## Current implementation coverage
 

@@ -81,9 +81,6 @@ permissions. The server verifies gateway identity but does not implement these
 per-user policy decisions itself. See [the architectural decisions](../DECISIONS.md)
 for the ownership boundary. Exports and validation preserve schemas, descriptions,
 and factual behavior without importing library-authored policy requirements.
-The contract export omits nonstandard action metadata. Legacy sensitivity and
-review claims remain in the MCP catalog pending the rest of the refactor; they
-are not imported policy floors.
 
 ## Verify the connection
 

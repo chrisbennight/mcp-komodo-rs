@@ -53,7 +53,6 @@ const MIN_LOG_TAIL: u64 = 1;
 const MAX_LOG_TAIL: u64 = 5_000;
 /// Default log-tail line count when the caller omits one.
 const DEFAULT_LOG_TAIL: u64 = 100;
-const ACTION_METADATA_KEY: &str = "io.modelcontextprotocol/action-metadata";
 const TRUST_ANNOTATIONS_KEY: &str = "io.modelcontextprotocol/trust-annotations";
 
 /// Process-wide capability selection, independent of per-user gateway authorization.
@@ -157,12 +156,10 @@ enum ToolKind {
     StacksWebhookSecretWrite,
 }
 
-/// Executable tool definition and gateway classification.
+/// Executable tool definition and factual MCP behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolSpec {
     pub name: &'static str,
-    pub side_effects: bool,
-    pub pii: bool,
     behavior: ToolBehavior,
     description: &'static str,
     kind: ToolKind,
@@ -171,18 +168,13 @@ pub struct ToolSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(
     clippy::struct_excessive_bools,
-    reason = "MCP defines four independent boolean behavior hints, an input sensitivity flag, and two boolean result trust labels"
+    reason = "MCP defines four independent boolean behavior hints"
 )]
 struct ToolBehavior {
     read_only: bool,
     destructive: bool,
     idempotent: bool,
     open_world: bool,
-    outcome: &'static str,
-    requires_review: bool,
-    input_sensitive: bool,
-    result_sensitive: bool,
-    result_untrusted: bool,
 }
 
 impl ToolBehavior {
@@ -192,11 +184,6 @@ impl ToolBehavior {
             destructive: false,
             idempotent: true,
             open_world: false,
-            outcome: "benign",
-            requires_review: false,
-            input_sensitive: false,
-            result_sensitive: false,
-            result_untrusted: true,
         }
     }
 
@@ -206,11 +193,6 @@ impl ToolBehavior {
             destructive: false,
             idempotent: false,
             open_world: false,
-            outcome: "consequential",
-            requires_review: false,
-            input_sensitive: false,
-            result_sensitive: false,
-            result_untrusted: true,
         }
     }
 
@@ -228,24 +210,9 @@ impl ToolBehavior {
         self.open_world = true;
         self
     }
-
-    const fn requires_review(mut self) -> Self {
-        self.requires_review = true;
-        self
-    }
-
-    const fn result_sensitive(mut self) -> Self {
-        self.result_sensitive = true;
-        self
-    }
-
-    const fn input_sensitive(mut self) -> Self {
-        self.input_sensitive = true;
-        self
-    }
 }
 
-/// Complete registry driving discovery, dispatch, and gateway policy generation.
+/// Complete registry driving discovery and dispatch.
 pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::SystemStatus,
@@ -272,27 +239,27 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "stacks.status",
         "Get one stack's normalized health and typed Core list facts, including images, placement, and repository provenance.",
     ),
-    sensitive_read_spec(
+    read_spec(
         ToolKind::StacksDiagnostics,
         "stacks.diagnostics",
         "Diagnose one stack: state, Docker status text, missing Compose files, per-service image and update signals, and deploy-vs-latest drift. Never returns file contents, environment, or logs.",
     ),
-    sensitive_read_spec(
+    read_spec(
         ToolKind::StacksConfigRead,
         "stacks.config.read",
         "Read one stack's configuration shape: file mode, run directory, file paths, env-file path, webhook flags, and presence flags for Compose, environment, and commands. Excludes raw Compose, environment, commands, and the webhook secret value.",
     ),
-    sensitive_read_spec(
+    read_spec(
         ToolKind::StacksComposeRead,
         "stacks.compose.read",
         "Read one stack's Compose file contents for a chosen source: configured, latest, or deployed. Returns file paths and full contents; excludes environment and the webhook secret.",
     ),
-    sensitive_read_spec(
+    read_spec(
         ToolKind::StacksEnvironmentRead,
         "stacks.environment.read",
         "Read one stack's environment text as reported by Core.",
     ),
-    sensitive_read_spec(
+    read_spec(
         ToolKind::StacksCommandsRead,
         "stacks.commands.read",
         "Read one stack's stored pre-deploy and post-deploy commands and their working directories.",
@@ -302,12 +269,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "stacks.webhook.status",
         "Report whether one stack's webhook is enabled, whether it forces deploy, and whether its secret is custom or inherited. Never returns the secret value.",
     ),
-    sensitive_read_spec(
+    read_spec(
         ToolKind::StacksWebhookSecretRead,
         "stacks.webhook.secret.read",
         "Read one stack's custom webhook token through native file transfer outside model context. An inherited token reports its source and valueAvailable false because the stack API does not return Core's shared token.",
     ),
-    sensitive_read_spec(
+    read_spec(
         ToolKind::StacksLogsTail,
         "stacks.logs.tail",
         "Tail one stack's container logs (1-5000 lines, up to 50 named services). Returns bounded stdout and stderr as reported by Core; stack configuration has its own typed reads.",
@@ -352,7 +319,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         "operations.status",
         "Get one operation by stable id with normalized outcome, resource correlation, initiating user, version, commit, and operation-specific data reported by Core. Command logs have their own typed read.",
     ),
-    sensitive_read_spec(
+    read_spec(
         ToolKind::OperationsLogsRead,
         "operations.logs.read",
         "Read one operation's command logs by its stable id: stage, command, stdout, and stderr per step.",
@@ -361,10 +328,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::StacksDeploy,
         "stacks.deploy",
         "Deploy one existing stack by exact name or id. Never retried.",
-        ToolBehavior::mutation()
-            .destructive()
-            .open_world()
-            .requires_review(),
+        ToolBehavior::mutation().destructive().open_world(),
     ),
     write_spec(
         ToolKind::StacksRestart,
@@ -376,19 +340,13 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::StacksStop,
         "stacks.stop",
         "Stop all services of one existing stack by exact name or id using Komodo's default termination timeout, preserving its containers. Never retried. For ambiguous outcomes, use operations.search to find the operation id, then operations.status to inspect it before deciding whether to submit again.",
-        ToolBehavior::mutation()
-            .destructive()
-            .idempotent()
-            .requires_review(),
+        ToolBehavior::mutation().destructive().idempotent(),
     ),
     write_spec(
         ToolKind::DeploymentsDeploy,
         "deployments.deploy",
         "Deploy one existing deployment by exact name or id. Never retried.",
-        ToolBehavior::mutation()
-            .destructive()
-            .open_world()
-            .requires_review(),
+        ToolBehavior::mutation().destructive().open_world(),
     ),
     write_spec(
         ToolKind::DeploymentsRestart,
@@ -406,107 +364,62 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::BuildsCancel,
         "builds.cancel",
         "Cancel one active build by exact name or id. Never retried.",
-        ToolBehavior::mutation()
-            .destructive()
-            .idempotent()
-            .requires_review(),
+        ToolBehavior::mutation().destructive().idempotent(),
     ),
     write_spec(
         ToolKind::ReposPull,
         "repos.pull",
         "Pull one managed repository by exact name or id. Never retried.",
-        ToolBehavior::mutation()
-            .destructive()
-            .open_world()
-            .requires_review(),
+        ToolBehavior::mutation().destructive().open_world(),
     ),
-    config_write_spec(
+    write_spec(
         ToolKind::StacksConfigPatch,
         "stacks.config.patch",
         "Patch supplied structural fields (file mode, run directory, file paths, env-file path); omitted fields stay unchanged and an empty file_paths list clears the list. Does not deploy. Komodo may retain submitted configuration. Never retried. Returns applied field names, not values; reconcile with stacks.config.read.",
-        ToolBehavior::mutation()
-            .destructive()
-            .requires_review()
-            .input_sensitive(),
+        ToolBehavior::mutation().destructive(),
     ),
-    config_write_spec(
+    write_spec(
         ToolKind::StacksComposeWrite,
         "stacks.compose.write",
         "Replace the entire inline Compose text; empty contents clears it. Source mode determines whether inline content is used; this does not change mode or deploy. Komodo may retain submitted configuration. Never retried. Returns applied field names, not contents; reconcile with stacks.compose.read using source configured.",
-        ToolBehavior::mutation()
-            .destructive()
-            .requires_review()
-            .input_sensitive(),
+        ToolBehavior::mutation().destructive(),
     ),
-    config_write_spec(
+    write_spec(
         ToolKind::StacksEnvironmentWrite,
         "stacks.environment.write",
         "Replace the entire environment text, not individual variables; an empty string clears it. Updates configuration without deploying. Komodo may retain submitted configuration. Never retried. Returns applied field names, not values; reconcile with stacks.environment.read.",
-        ToolBehavior::mutation()
-            .destructive()
-            .requires_review()
-            .input_sensitive(),
+        ToolBehavior::mutation().destructive(),
     ),
-    config_write_spec(
+    write_spec(
         ToolKind::StacksCommandsWrite,
         "stacks.commands.write",
         "Replace each supplied pre-deploy or post-deploy command; omitted commands stay unchanged and an empty command clears its text. Stores commands for later deployment with upstream execution privileges; does not execute or deploy now. Komodo may retain submitted configuration. Never retried. Returns applied field names, not values; reconcile with stacks.commands.read.",
-        ToolBehavior::mutation()
-            .destructive()
-            .requires_review()
-            .input_sensitive(),
+        ToolBehavior::mutation().destructive(),
     ),
-    config_write_spec(
+    write_spec(
         ToolKind::StacksFileWrite,
         "stacks.file.write",
         "Replace one file's contents in files-on-host or repo mode; an empty string writes an empty file. Komodo owns file-path and mode enforcement. Komodo may retain submitted configuration. Never retried. Returns target, applied field, file path, and an operation id, not contents; reconcile with operations.status before further actions.",
-        ToolBehavior::mutation()
-            .destructive()
-            .requires_review()
-            .input_sensitive()
-            .result_sensitive(),
+        ToolBehavior::mutation().destructive(),
     ),
-    config_write_spec(
+    write_spec(
         ToolKind::StacksWebhookUpdate,
         "stacks.webhook.update",
         "Set supplied webhook enabled and force-deploy flags; omitted flags stay unchanged. Changes future webhook handling without deploying now. Never retried. Returns applied field names, not the secret; reconcile with stacks.webhook.status.",
-        ToolBehavior::mutation().destructive().requires_review(),
+        ToolBehavior::mutation().destructive(),
     ),
-    config_write_spec(
+    write_spec(
         ToolKind::StacksWebhookSecretWrite,
         "stacks.webhook.secret.write",
         "Set a custom webhook token from a completed native credential file, or explicitly restore inheritance of Core's shared token. Does not deploy. Komodo may retain the submitted secret in its own operation history. Never retried. Returns the applied field name, not the value; reconcile with stacks.webhook.status for its source or the governed stacks.webhook.secret.read for a custom value.",
-        ToolBehavior::mutation()
-            .destructive()
-            .requires_review()
-            .input_sensitive(),
+        ToolBehavior::mutation().destructive(),
     ),
 ];
 
 const fn read_spec(kind: ToolKind, name: &'static str, description: &'static str) -> ToolSpec {
     ToolSpec {
         name,
-        side_effects: false,
-        pii: false,
         behavior: ToolBehavior::read(),
-        description,
-        kind,
-    }
-}
-
-/// A read whose bounded output still carries operator-sensitive signals such as
-/// file paths and Docker status text, so it is classified sensitive and labels
-/// its results accordingly.
-const fn sensitive_read_spec(
-    kind: ToolKind,
-    name: &'static str,
-    description: &'static str,
-) -> ToolSpec {
-    ToolSpec {
-        name,
-        side_effects: false,
-        pii: true,
-        behavior: ToolBehavior::read().result_sensitive(),
         description,
         kind,
     }
@@ -520,27 +433,6 @@ const fn write_spec(
 ) -> ToolSpec {
     ToolSpec {
         name,
-        side_effects: true,
-        pii: false,
-        behavior,
-        description,
-        kind,
-    }
-}
-
-/// A typed configuration or content write.
-/// The `pii` compatibility flag mirrors the write's
-/// declared input sensitivity.
-const fn config_write_spec(
-    kind: ToolKind,
-    name: &'static str,
-    description: &'static str,
-    behavior: ToolBehavior,
-) -> ToolSpec {
-    ToolSpec {
-        name,
-        side_effects: true,
-        pii: behavior.input_sensitive,
         behavior,
         description,
         kind,
@@ -1500,7 +1392,7 @@ impl KomodoMcp {
             ToolKind::StacksWebhookUpdate => self.stack_webhook_update(params).await,
             ToolKind::StacksWebhookSecretWrite => self.stack_webhook_secret_write(params).await,
         };
-        result.map(|result| trust_annotated(result, spec.behavior))
+        result.map(trust_annotated)
     }
 
     async fn system_status(
@@ -2249,37 +2141,6 @@ fn tool<I: JsonSchema, O: JsonSchema>(spec: &ToolSpec) -> Tool {
             .idempotent(spec.behavior.idempotent)
             .open_world(spec.behavior.open_world),
     )
-    .with_meta(action_metadata(spec.behavior))
-}
-
-fn action_metadata(behavior: ToolBehavior) -> Meta {
-    let input_sensitivity = if behavior.input_sensitive {
-        "sensitive"
-    } else {
-        "operational"
-    };
-    let return_sensitivity = if behavior.result_sensitive {
-        "sensitive"
-    } else {
-        "operational"
-    };
-    Meta(
-        serde_json::from_value(serde_json::json!({
-            ACTION_METADATA_KEY: {
-                "inputMetadata": {
-                    "destination": "internal",
-                    "sensitivity": input_sensitivity
-                },
-                "returnMetadata": {
-                    "source": "first-party",
-                    "sensitivity": return_sensitivity
-                },
-                "outcome": behavior.outcome,
-                "requiresReview": behavior.requires_review
-            }
-        }))
-        .expect("static action metadata must be an object"),
-    )
 }
 
 fn schema_object<T: JsonSchema>() -> Map<String, Value> {
@@ -2400,10 +2261,9 @@ fn structured<T: Serialize>(output: T) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::structured(value))
 }
 
-fn trust_annotated(mut result: CallToolResult, behavior: ToolBehavior) -> CallToolResult {
+fn trust_annotated(mut result: CallToolResult) -> CallToolResult {
     let trust = serde_json::json!({
-        "sensitive": behavior.result_sensitive,
-        "untrusted": behavior.result_untrusted
+        "untrusted": true
     });
     result
         .meta
@@ -2992,9 +2852,9 @@ mod tests {
     use serde_json::{Map, Value, json};
 
     use super::{
-        ACTION_METADATA_KEY, JSON_SCHEMA_TYPES, KomodoMcp, MCP_PROTOCOL_VERSION, SearchInput,
-        ServerStatus, TOOL_REGISTRY, TRUST_ANNOTATIONS_KEY, ToolBehavior, ToolSpec,
-        normalize_build, normalize_deployment, normalize_repo, normalize_server, normalize_stack,
+        JSON_SCHEMA_TYPES, KomodoMcp, MCP_PROTOCOL_VERSION, SearchInput, ServerStatus,
+        TOOL_REGISTRY, TRUST_ANNOTATIONS_KEY, ToolBehavior, ToolSpec, normalize_build,
+        normalize_deployment, normalize_repo, normalize_server, normalize_stack,
         normalize_stack_diagnostics, normalize_type_unions, normalize_webhook_secret,
         operation_matches, search, select, trust_annotated, validate_query, validate_selector,
     };
@@ -3480,7 +3340,7 @@ mod tests {
             Box::pin(async move {
                 self.before_read()?;
                 // `stack-1` carries a full config with a custom webhook secret;
-                // `stack-2` inherits its secret and defines no sensitive content.
+                // `stack-2` inherits its token and has no inline content.
                 if selector == "stack-1" {
                     Ok(StackDetail {
                         config: StackConfigDetail {
@@ -4016,7 +3876,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_and_catalog_are_exactly_aligned_and_classified() {
+    fn registry_and_catalog_agree_on_standard_behavior_without_policy_claims() {
         let catalog = KomodoMcp::list_tools_payload();
         let names = catalog
             .tools
@@ -4054,7 +3914,6 @@ mod tests {
                 annotations.open_world_hint,
                 Some(policy.behavior.open_world)
             );
-            assert_eq!(policy.side_effects, !policy.behavior.read_only);
             let wire = serde_json::to_value(tool).expect("tool serializes");
             assert_eq!(
                 wire["annotations"],
@@ -4065,30 +3924,16 @@ mod tests {
                     "openWorldHint": policy.behavior.open_world
                 })
             );
-            let input_sensitivity = if policy.behavior.input_sensitive {
-                "sensitive"
-            } else {
-                "operational"
-            };
-            let return_sensitivity = if policy.behavior.result_sensitive {
-                "sensitive"
-            } else {
-                "operational"
-            };
-            assert_eq!(
-                wire["_meta"][ACTION_METADATA_KEY],
-                json!({
-                    "inputMetadata": {
-                        "destination": "internal",
-                        "sensitivity": input_sensitivity
-                    },
-                    "returnMetadata": {
-                        "source": "first-party",
-                        "sensitivity": return_sensitivity
-                    },
-                    "outcome": policy.behavior.outcome,
-                    "requiresReview": policy.behavior.requires_review
-                })
+            assert!(wire.get("_meta").is_none());
+            for claim in ["risk", "pii", "requiresReview", "governance"] {
+                assert!(wire.get(claim).is_none(), "{claim} is operator-owned");
+            }
+            assert!(
+                !tool
+                    .description
+                    .as_deref()
+                    .unwrap()
+                    .contains("komodo-admin")
             );
             assert!(tool.output_schema.is_some());
             assert_eq!(tool.input_schema["additionalProperties"], false);
@@ -4118,11 +3963,6 @@ mod tests {
                 destructive: false,
                 idempotent: true,
                 open_world: false,
-                outcome: "benign",
-                requires_review: false,
-                input_sensitive: false,
-                result_sensitive: false,
-                result_untrusted: true,
             },
         );
     }
@@ -4136,11 +3976,6 @@ mod tests {
                 destructive: true,
                 idempotent: false,
                 open_world: true,
-                outcome: "consequential",
-                requires_review: true,
-                input_sensitive: false,
-                result_sensitive: false,
-                result_untrusted: true,
             },
         );
         assert_behavior(
@@ -4150,11 +3985,6 @@ mod tests {
                 destructive: false,
                 idempotent: false,
                 open_world: false,
-                outcome: "consequential",
-                requires_review: false,
-                input_sensitive: false,
-                result_sensitive: false,
-                result_untrusted: true,
             },
         );
         assert_behavior(
@@ -4164,11 +3994,6 @@ mod tests {
                 destructive: false,
                 idempotent: false,
                 open_world: true,
-                outcome: "consequential",
-                requires_review: false,
-                input_sensitive: false,
-                result_sensitive: false,
-                result_untrusted: true,
             },
         );
         assert_behavior(
@@ -4178,11 +4003,6 @@ mod tests {
                 destructive: true,
                 idempotent: true,
                 open_world: false,
-                outcome: "consequential",
-                requires_review: true,
-                input_sensitive: false,
-                result_sensitive: false,
-                result_untrusted: true,
             },
         );
     }
@@ -4192,18 +4012,12 @@ mod tests {
         let mut meta = Meta::new();
         meta.0.insert("existing".into(), json!({"kept": true}));
         let result = CallToolResult::structured(json!({"ok": true})).with_meta(Some(meta));
-        let behavior = TOOL_REGISTRY
-            .iter()
-            .find(|spec| spec.name == "system.status")
-            .expect("registered tool")
-            .behavior;
-
-        let wire = serde_json::to_value(trust_annotated(result, behavior))
-            .expect("annotated result serializes");
+        let wire =
+            serde_json::to_value(trust_annotated(result)).expect("annotated result serializes");
         assert_eq!(wire["_meta"]["existing"], json!({"kept": true}));
         assert_eq!(
             wire["_meta"][TRUST_ANNOTATIONS_KEY],
-            json!({"sensitive": false, "untrusted": true})
+            json!({"untrusted": true})
         );
     }
 
@@ -4752,13 +4566,12 @@ mod tests {
                 serde_json::to_value(&result).expect("result serializes")["_meta"]
                     [TRUST_ANNOTATIONS_KEY],
                 json!({
-                    "sensitive": policy.behavior.result_sensitive,
-                    "untrusted": policy.behavior.result_untrusted
+                    "untrusted": true
                 })
             );
             let structured = result.structured_content.expect("structured output");
             assert!(structured.is_object(), "{name} returned a non-object");
-            if policy.side_effects {
+            if !policy.behavior.read_only {
                 // Execute-based mutations echo an `admin:`-prefixed operation and
                 // file writes an `admin:`-prefixed operation id. Config writes
                 // expose no marker, but the read-scoped fake rejects writes, so a
@@ -5283,7 +5096,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_is_a_sensitive_read_and_labels_its_results() {
+    fn diagnostics_has_standard_read_behavior() {
         assert_behavior(
             &["stacks.diagnostics"],
             ToolBehavior {
@@ -5291,19 +5104,8 @@ mod tests {
                 destructive: false,
                 idempotent: true,
                 open_world: false,
-                outcome: "benign",
-                requires_review: false,
-                input_sensitive: false,
-                result_sensitive: true,
-                result_untrusted: true,
             },
         );
-        let spec = TOOL_REGISTRY
-            .iter()
-            .find(|spec| spec.name == "stacks.diagnostics")
-            .expect("registered tool");
-        assert!(spec.pii, "diagnostics must be classified sensitive");
-        assert!(!spec.side_effects, "diagnostics is a read");
     }
 
     #[test]
@@ -5644,19 +5446,14 @@ mod tests {
     }
 
     #[test]
-    fn governed_sensitive_reads_are_classified_and_webhook_status_is_metadata() {
-        let sensitive = ToolBehavior {
+    fn content_reads_and_credential_metadata_have_standard_read_behavior() {
+        let read = ToolBehavior {
             read_only: true,
             destructive: false,
             idempotent: true,
             open_world: false,
-            outcome: "benign",
-            requires_review: false,
-            input_sensitive: false,
-            result_sensitive: true,
-            result_untrusted: true,
         };
-        let sensitive_reads = [
+        let reads = [
             "stacks.config.read",
             "stacks.compose.read",
             "stacks.environment.read",
@@ -5664,24 +5461,9 @@ mod tests {
             "stacks.webhook.secret.read",
             "stacks.logs.tail",
             "operations.logs.read",
+            "stacks.webhook.status",
         ];
-        assert_behavior(&sensitive_reads, sensitive);
-        for name in sensitive_reads {
-            let spec = TOOL_REGISTRY
-                .iter()
-                .find(|spec| spec.name == name)
-                .expect("registered tool");
-            assert!(spec.pii, "{name} must be classified sensitive");
-            assert!(!spec.side_effects, "{name} is a read");
-        }
-        // Webhook status reports only existence/source metadata, so it stays a
-        // low-risk read rather than a sensitive one.
-        let status = TOOL_REGISTRY
-            .iter()
-            .find(|spec| spec.name == "stacks.webhook.status")
-            .expect("registered tool");
-        assert!(!status.pii);
-        assert!(!status.behavior.result_sensitive);
+        assert_behavior(&reads, read);
     }
 
     async fn dispatch_read(name: &'static str, input: Value) -> (Value, Value) {
@@ -5705,7 +5487,7 @@ mod tests {
         assert_eq!(custom["file"]["uri"], "mcp-file://fixture/result");
         assert!(!custom.to_string().contains("sentinel-hook"));
         assert!(custom.get("value").is_none());
-        assert_eq!(trust, json!({ "sensitive": true, "untrusted": true }));
+        assert_eq!(trust, json!({ "untrusted": true }));
 
         let (inherited, _) = dispatch_read(
             "stacks.webhook.secret.read",
@@ -5828,7 +5610,7 @@ mod tests {
         assert_eq!(config["hasEnvironment"], true);
         assert_eq!(config["hasPreDeploy"], true);
         assert_eq!(config["hasPostDeploy"], false);
-        assert_eq!(trust, json!({ "sensitive": true, "untrusted": true }));
+        assert_eq!(trust, json!({ "untrusted": true }));
         // The shape view must not carry the raw secret, Compose, or environment.
         let serialized = config.to_string();
         assert!(!serialized.contains("sentinel-hook"));
@@ -5837,7 +5619,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn environment_and_commands_reads_return_their_sensitive_payloads() {
+    async fn environment_and_commands_reads_return_core_contents() {
         let (environment, _) =
             dispatch_read("stacks.environment.read", json!({ "selector": "stack-1" })).await;
         assert_eq!(environment["environment"], "TOKEN=sentinel-env\n");
@@ -5873,7 +5655,7 @@ mod tests {
         )
         .await;
         assert_eq!(log["stdout"], "line-1\nline-2");
-        assert_eq!(trust, json!({ "sensitive": true, "untrusted": true }));
+        assert_eq!(trust, json!({ "untrusted": true }));
     }
 
     #[tokio::test]
@@ -5885,7 +5667,7 @@ mod tests {
         .await;
         assert_eq!(logs["logs"][0]["stage"], "deploy");
         assert_eq!(logs["logs"][0]["stdout"], "ok");
-        assert_eq!(trust, json!({ "sensitive": true, "untrusted": true }));
+        assert_eq!(trust, json!({ "untrusted": true }));
 
         let missing = CallToolRequestParams::new("operations.logs.read")
             .with_arguments(arguments(&json!({ "operation_id": "operation-absent" })));
@@ -5919,8 +5701,7 @@ mod tests {
                 "{name} reconciliation"
             );
             assert!(catalog.tools.iter().any(|tool| tool.name == reconciliation));
-            let spec = TOOL_REGISTRY.iter().find(|spec| spec.name == name).unwrap();
-            if spec.behavior.input_sensitive {
+            if name != "stacks.webhook.update" {
                 assert!(
                     description.contains("Komodo may retain"),
                     "{name} retention"
@@ -5930,60 +5711,19 @@ mod tests {
     }
 
     #[test]
-    fn config_writes_retain_their_existing_mcp_classifications() {
-        fn spec(name: &str) -> &'static ToolSpec {
-            TOOL_REGISTRY
-                .iter()
-                .find(|spec| spec.name == name)
-                .expect("registered tool")
-        }
-        // Every write is a side-effecting tool that requires review.
-        for name in [
-            "stacks.config.patch",
-            "stacks.compose.write",
-            "stacks.environment.write",
-            "stacks.commands.write",
-            "stacks.file.write",
-            "stacks.webhook.update",
-            "stacks.webhook.secret.write",
-        ] {
-            let spec = spec(name);
-            assert!(spec.side_effects, "{name} side effects");
-            assert!(spec.behavior.requires_review, "{name} requires review");
-        }
-        // Writes that accept sensitive input (paths, content, or the secret) are
-        // classified sensitive; toggling webhook flags is not.
-        for name in [
-            "stacks.config.patch",
-            "stacks.compose.write",
-            "stacks.environment.write",
-            "stacks.commands.write",
-            "stacks.file.write",
-            "stacks.webhook.secret.write",
-        ] {
-            let spec = spec(name);
-            assert!(spec.pii, "{name} input is sensitive");
-            assert!(spec.behavior.input_sensitive, "{name} input sensitive flag");
-        }
-        let webhook_update = spec("stacks.webhook.update");
-        assert!(!webhook_update.pii, "flag toggles are not secret input");
-        assert!(!webhook_update.behavior.input_sensitive);
-        // Only file.write echoes an operator-sensitive path value, so only it
-        // labels its result sensitive; the others return field names.
-        assert!(spec("stacks.file.write").behavior.result_sensitive);
-        for name in [
-            "stacks.config.patch",
-            "stacks.compose.write",
-            "stacks.environment.write",
-            "stacks.commands.write",
-            "stacks.webhook.update",
-            "stacks.webhook.secret.write",
-        ] {
-            assert!(
-                !spec(name).behavior.result_sensitive,
-                "{name} returns field names, not values"
-            );
-        }
+    fn configuration_replacements_have_standard_destructive_mutation_behavior() {
+        assert_behavior(
+            &[
+                "stacks.config.patch",
+                "stacks.compose.write",
+                "stacks.environment.write",
+                "stacks.commands.write",
+                "stacks.file.write",
+                "stacks.webhook.update",
+                "stacks.webhook.secret.write",
+            ],
+            ToolBehavior::mutation().destructive(),
+        );
     }
 
     #[tokio::test]

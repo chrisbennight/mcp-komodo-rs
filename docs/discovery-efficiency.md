@@ -4,7 +4,7 @@ Choose a [capability profile](configuration.md#select-a-profile) for the process
 then use gateway discovery to load names and descriptions before requesting the
 schemas of selected tools. The server caches immutable catalog definitions and
 shares schema allocations. It never caches credentials, resource inventories,
-or sensitive tool results in that catalog.
+or tool results in that catalog.
 
 With the connected gateway, request `komodo.searchTools` in `operations` mode
 with `detail: "nameDescription"` and a bounded limit. Load selected input/output
@@ -42,6 +42,6 @@ name/description projection costs, and local process export latency. The Rust
 example separately reports first construction and repeated in-process catalog
 latency. Compare the same build profile, machine, and load; neither command
 measures gateway transport latency or proves model selection accuracy. Fixed
-task regressions cover status lookup, a sensitive environment read, stopping a
+task regressions cover status lookup, an environment read, stopping a
 stack, and writing its environment under the intended profiles. Client result
 deduplication and artifact access checks require their owning integration tests.
