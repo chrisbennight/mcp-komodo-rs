@@ -56,8 +56,8 @@ and Ntfy endpoint text is not scanned for words or query names that resemble sec
 
 History parsing uses the typed Core export structure. Invalid TOML reports a
 fixed compatibility error and numeric location without echoing document bytes.
-Both documents are parsed before publishing files. Search publishes originals
-only for the caller's selected page. Missing native support or capacity sets
+Both documents and every selected search record are parsed before publishing files.
+Search publishes originals only for the caller's selected page. Missing native support or capacity sets
 `originalFileUnavailable`; ordinary configuration and operation facts remain
 available, and credentials never fall back inline. Core may retain credentials
 in its configuration and history.

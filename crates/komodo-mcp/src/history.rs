@@ -87,12 +87,14 @@ impl PreparedDocument {
     }
 }
 
-impl KomodoMcp {
-    pub(super) fn normalize_history_operation(
-        &self,
-        mut item: OperationItem,
-    ) -> Result<OperationStatus, McpError> {
-        // Parse both documents before admitting any native output file.
+pub(super) struct PreparedOperation {
+    item: OperationItem,
+    previous: Option<PreparedDocument>,
+    current: Option<PreparedDocument>,
+}
+
+impl PreparedOperation {
+    pub(super) fn parse(mut item: OperationItem) -> Result<Self, McpError> {
         let previous = item
             .prev_toml
             .take()
@@ -103,11 +105,31 @@ impl KomodoMcp {
             .take()
             .map(PreparedDocument::parse)
             .transpose()?;
-        let mut status = normalize_operation(item);
-        status.previous_configuration =
-            previous.map(|doc| doc.publish(self, "operation-before.toml"));
-        status.current_configuration = current.map(|doc| doc.publish(self, "operation-after.toml"));
-        Ok(status)
+        Ok(Self {
+            item,
+            previous,
+            current,
+        })
+    }
+
+    pub(super) fn publish(self, handler: &KomodoMcp) -> OperationStatus {
+        let mut status = normalize_operation(self.item);
+        status.previous_configuration = self
+            .previous
+            .map(|doc| doc.publish(handler, "operation-before.toml"));
+        status.current_configuration = self
+            .current
+            .map(|doc| doc.publish(handler, "operation-after.toml"));
+        status
+    }
+}
+
+impl KomodoMcp {
+    pub(super) fn normalize_history_operation(
+        &self,
+        item: OperationItem,
+    ) -> Result<OperationStatus, McpError> {
+        Ok(PreparedOperation::parse(item)?.publish(self))
     }
 }
 
@@ -210,16 +232,21 @@ fn project_alerter(config: &mut dyn TableLike, path: &str, fields: &mut Vec<Stri
     };
     if let Some(index) =
         credential_index.filter(|index| parts.get(*index).is_some_and(|part| !part.is_empty()))
-        && let Ok(mut path) = url.path_segments_mut()
     {
-        path.clear()
-            .extend(parts.iter().enumerate().map(|(i, part)| {
+        let path = parts
+            .iter()
+            .enumerate()
+            .map(|(i, part)| {
                 if i == index {
                     "credential-in-original-file"
                 } else {
                     part.as_str()
                 }
-            }));
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        // set_path accepts already encoded segments without encoding '%' again.
+        url.set_path(&format!("/{path}"));
         changed = true;
     }
     if kind.as_deref() == Some("Pushover") {
@@ -369,6 +396,34 @@ mod tests {
             let result = PreparedDocument::parse(source.clone()).unwrap();
             assert_eq!(result.toml, source);
             assert!(result.original.is_none());
+        }
+    }
+
+    #[test]
+    fn webhook_projection_preserves_percent_encoded_ordinary_path_segments() {
+        for (kind, url, ordinary) in [
+            (
+                "Slack",
+                "https://hooks.slack.com/services/TPUBLIC%2FNAME/BPUBLIC%20NAME/synthetic-url-token",
+                "TPUBLIC%2FNAME/BPUBLIC%20NAME",
+            ),
+            (
+                "Discord",
+                "https://discord.com/api/webhooks/public%20identifier/synthetic-url-token/extra%2Fpath",
+                "webhooks/public%20identifier",
+            ),
+        ] {
+            let source = format!(
+                "[[alerter]]\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
+            );
+            let result = PreparedDocument::parse(source.clone()).unwrap();
+            assert!(result.toml.contains(ordinary));
+            assert!(!result.toml.contains("%25"));
+            assert!(!result.toml.contains("synthetic-url-token"));
+            if kind == "Discord" {
+                assert!(result.toml.contains("extra%2Fpath"));
+            }
+            assert_eq!(*result.original.unwrap(), source.into_bytes());
         }
     }
 

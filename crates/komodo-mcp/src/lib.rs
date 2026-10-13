@@ -1745,12 +1745,16 @@ impl KomodoMcp {
             .filter(|item| operation_matches(item, query.as_deref()))
             .collect::<Vec<_>>();
         let total = matches.len();
-        let items = matches
+        let prepared = matches
             .into_iter()
             .skip(usize::from(input.offset))
             .take(input.limit)
-            .map(|item| self.normalize_history_operation(item))
+            .map(history::PreparedOperation::parse)
             .collect::<Result<Vec<_>, _>>()?;
+        let items = prepared
+            .into_iter()
+            .map(|operation| operation.publish(self))
+            .collect::<Vec<_>>();
         let consumed = usize::from(input.offset) + items.len();
         let next_offset = (consumed < total)
             .then(|| {
@@ -3384,6 +3388,21 @@ mod tests {
                                 ..Default::default()},
                             history_operation()
                         ], next_page:None
+                    });
+                }
+                if page == 4 {
+                    return Ok(OperationPage {
+                        operations: vec![
+                            history_operation(),
+                            OperationItem {
+                                current_toml: Some(
+                                    "[[stack]]\n[stack.config]\nwebhook_secret = 'unterminated"
+                                        .into(),
+                                ),
+                                ..Default::default()
+                            },
+                        ],
+                        next_page: None,
                     });
                 }
                 Ok(OperationPage {
@@ -5801,6 +5820,22 @@ mod tests {
         assert!(last["nextOffset"].is_null());
         assert_eq!(files.published.lock().unwrap().len(), 1);
         assert!(!last.to_string().contains("synthetic-history-token"));
+    }
+
+    #[tokio::test]
+    async fn invalid_selected_history_batch_publishes_no_unreachable_files() {
+        let files = Arc::new(TestCredentialFiles::default());
+        let handler = KomodoMcp::read_only(Arc::new(FakeApi::default()))
+            .with_credential_files("fixture-owner".into(), files.clone());
+        let error = handler
+            .dispatch(
+                &CallToolRequestParams::new("operations.search")
+                    .with_arguments(arguments(&json!({"page":4,"limit":2}))),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, "Core history document is not valid TOML");
+        assert!(files.published.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
