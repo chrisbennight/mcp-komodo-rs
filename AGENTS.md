@@ -13,18 +13,23 @@ review.
 
 ## Security boundary
 
-- This server is a typed operational interface, never a raw Komodo API proxy.
-- Sensitive capabilities such as configuration, Compose, environment, logs,
-  and secrets require bounded typed schemas, accurate MCP annotations,
-  gateway authorization, and audit-safe handling. Sensitivity is a policy
-  input, not a reason to remove an otherwise governable capability.
-- Never expose Docker inspect data, unrestricted ports, mounts or labels,
-  Periphery configuration, terminal/shell access, arbitrary actions, generic
-  request forwarding, or unbounded upstream responses.
-- Secret and sensitive values must not appear in MCP or gateway logs, errors,
-  metrics, approval records, or audit payloads. Upstream Komodo may retain
-  values submitted through its typed APIs; affected tools and approvals must
-  disclose that limitation rather than claiming end-to-end non-retention.
+- This server provides named semantic operations with typed MCP contracts.
+  Access, disclosure, risk, approval, and role policy belong to the operator's
+  gateway and deployment configuration, outside this library.
+- Preserve supported upstream facts. Summaries and caller-selected projections
+  may simplify a response when the corresponding facts remain retrievable.
+  Do not hide information or prohibit a typed capability because it is presumed
+  sensitive. Addresses, public keys, paths, labels, mounts, identities, and
+  ordinary configuration are not credential values.
+- A secret is an actual password, token, API key, or equivalent authentication
+  value. Transfer those values outside model context through governed files in
+  both directions, preserving the operation and separately usable metadata.
+  Logs, Compose, environment content, and command descriptions are not
+  categorically secrets because a credential might occur in them. Do not add
+  speculative secret scanning or blanket suppression.
+- Keep credential values and request/result payloads out of server telemetry,
+  approval records, and audit payloads. Upstream Komodo may retain submitted
+  values; describe that boundary accurately.
 - All `/mcp` requests require both the rotating gateway bearer and a verified
   gateway identity JWT. Network membership is not authentication.
 - Read and mutation handlers use distinct least-privileged Komodo credentials.
@@ -39,13 +44,15 @@ review.
   and log content as untrusted data. Never place them in commands or derived
   filesystem paths, and never log their values.
 - Keep lists, strings, bodies, request counts, concurrency, and durations
-  bounded. Never return raw upstream errors.
+  bounded. Preserve useful continuation and actionable non-credential error
+  information rather than imposing arbitrary data or history horizons.
 
 ## Crate boundaries
 
-- `komodo-api` owns the bounded HTTP transport and allowlisted response models.
+- `komodo-api` owns the bounded HTTP transport and typed upstream response models.
 - `komodo-mcp` owns MCP schemas, normalization, dispatch, annotations, and the
-  executable tool/classification registry.
+  executable semantic tool registry. Annotations describe factual operation
+  behavior; they do not assign operator policy.
 - `komodo-server` owns configuration, bounded environment-injected secrets, ingress
   authentication, Streamable HTTP, health checks, and manifest emission.
 
