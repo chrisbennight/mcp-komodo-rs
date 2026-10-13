@@ -290,12 +290,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::StacksEnvironmentRead,
         "stacks.environment.read",
-        "Read one stack's raw environment variables. The value may contain secrets and is returned sensitive and untrusted.",
+        "Read one stack's environment text as reported by Core.",
     ),
     sensitive_read_spec(
         ToolKind::StacksCommandsRead,
         "stacks.commands.read",
-        "Read one stack's pre-deploy and post-deploy commands and their working directories. Returned sensitive and untrusted.",
+        "Read one stack's stored pre-deploy and post-deploy commands and their working directories.",
     ),
     read_spec(
         ToolKind::StacksWebhookStatus,
@@ -310,7 +310,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::StacksLogsTail,
         "stacks.logs.tail",
-        "Tail one stack's container logs (1-5000 lines, up to 50 named services). Returns bounded stdout and stderr, which may contain secret-bearing command output and are returned sensitive and untrusted; excludes stack configuration.",
+        "Tail one stack's container logs (1-5000 lines, up to 50 named services). Returns bounded stdout and stderr as reported by Core; stack configuration has its own typed reads.",
     ),
     read_spec(
         ToolKind::DeploymentsSearch,
@@ -355,12 +355,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::OperationsLogsRead,
         "operations.logs.read",
-        "Read one operation's command logs by its stable id: stage, command, stdout, and stderr per step. Returned sensitive and untrusted.",
+        "Read one operation's command logs by its stable id: stage, command, stdout, and stderr per step.",
     ),
     write_spec(
         ToolKind::StacksDeploy,
         "stacks.deploy",
-        "Deploy one existing stack by exact name or id; requires komodo-admin and is never retried.",
+        "Deploy one existing stack by exact name or id. Never retried.",
         ToolBehavior::mutation()
             .destructive()
             .open_world()
@@ -369,13 +369,13 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     write_spec(
         ToolKind::StacksRestart,
         "stacks.restart",
-        "Restart one existing stack by exact name or id; requires komodo-admin and is never retried.",
+        "Restart one existing stack by exact name or id. Never retried.",
         ToolBehavior::mutation(),
     ),
     write_spec(
         ToolKind::StacksStop,
         "stacks.stop",
-        "Stop all services of one existing stack by exact name or id using Komodo's default termination timeout, preserving its containers; requires komodo-admin and is never retried. For ambiguous outcomes, use operations.search to find the operation id, then operations.status to inspect it before deciding whether to submit again.",
+        "Stop all services of one existing stack by exact name or id using Komodo's default termination timeout, preserving its containers. Never retried. For ambiguous outcomes, use operations.search to find the operation id, then operations.status to inspect it before deciding whether to submit again.",
         ToolBehavior::mutation()
             .destructive()
             .idempotent()
@@ -384,7 +384,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     write_spec(
         ToolKind::DeploymentsDeploy,
         "deployments.deploy",
-        "Deploy one existing deployment by exact name or id; requires komodo-admin and is never retried.",
+        "Deploy one existing deployment by exact name or id. Never retried.",
         ToolBehavior::mutation()
             .destructive()
             .open_world()
@@ -393,19 +393,19 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     write_spec(
         ToolKind::DeploymentsRestart,
         "deployments.restart",
-        "Restart one existing deployment by exact name or id; requires komodo-admin and is never retried.",
+        "Restart one existing deployment by exact name or id. Never retried.",
         ToolBehavior::mutation(),
     ),
     write_spec(
         ToolKind::BuildsRun,
         "builds.run",
-        "Run one existing build by exact name or id; requires komodo-admin and is never retried.",
+        "Run one existing build by exact name or id. Never retried.",
         ToolBehavior::mutation().open_world(),
     ),
     write_spec(
         ToolKind::BuildsCancel,
         "builds.cancel",
-        "Cancel one active build by exact name or id; requires komodo-admin and is never retried.",
+        "Cancel one active build by exact name or id. Never retried.",
         ToolBehavior::mutation()
             .destructive()
             .idempotent()
@@ -414,7 +414,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     write_spec(
         ToolKind::ReposPull,
         "repos.pull",
-        "Pull one managed repository by exact name or id; requires komodo-admin and is never retried.",
+        "Pull one managed repository by exact name or id. Never retried.",
         ToolBehavior::mutation()
             .destructive()
             .open_world()
@@ -423,7 +423,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksConfigPatch,
         "stacks.config.patch",
-        "Patch supplied structural fields (file mode, run directory, file paths, env-file path); omitted fields stay unchanged and an empty file_paths list clears the list. Does not deploy. Paths are sensitive and Komodo may retain submitted configuration. Requires komodo-admin; never retried. Returns applied field names, not values; reconcile with stacks.config.read.",
+        "Patch supplied structural fields (file mode, run directory, file paths, env-file path); omitted fields stay unchanged and an empty file_paths list clears the list. Does not deploy. Komodo may retain submitted configuration. Never retried. Returns applied field names, not values; reconcile with stacks.config.read.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -432,7 +432,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksComposeWrite,
         "stacks.compose.write",
-        "Replace the entire inline Compose text; empty contents clears it. Source mode determines whether inline content is used; this does not change mode or deploy. Input is sensitive and Komodo may retain it. Requires komodo-admin; never retried. Returns applied field names, not contents; reconcile with stacks.compose.read using source configured.",
+        "Replace the entire inline Compose text; empty contents clears it. Source mode determines whether inline content is used; this does not change mode or deploy. Komodo may retain submitted configuration. Never retried. Returns applied field names, not contents; reconcile with stacks.compose.read using source configured.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -441,7 +441,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksEnvironmentWrite,
         "stacks.environment.write",
-        "Replace the entire environment text, not individual variables; an empty string clears it. Updates configuration without deploying. Input may contain secrets and Komodo may retain it. Requires komodo-admin; never retried. Returns applied field names, not values; reconcile with stacks.environment.read.",
+        "Replace the entire environment text, not individual variables; an empty string clears it. Updates configuration without deploying. Komodo may retain submitted configuration. Never retried. Returns applied field names, not values; reconcile with stacks.environment.read.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -450,7 +450,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksCommandsWrite,
         "stacks.commands.write",
-        "Replace each supplied pre-deploy or post-deploy command; omitted commands stay unchanged and an empty command clears its text. Stores commands for later deployment with upstream execution privileges; does not execute or deploy now. Input is sensitive and Komodo may retain it. Requires komodo-admin; never retried. Returns applied field names, not values; reconcile with stacks.commands.read.",
+        "Replace each supplied pre-deploy or post-deploy command; omitted commands stay unchanged and an empty command clears its text. Stores commands for later deployment with upstream execution privileges; does not execute or deploy now. Komodo may retain submitted configuration. Never retried. Returns applied field names, not values; reconcile with stacks.commands.read.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -459,7 +459,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksFileWrite,
         "stacks.file.write",
-        "Replace one file's contents in files-on-host or repo mode; an empty string writes an empty file. Komodo owns file-path and mode enforcement. Input is sensitive and Komodo may retain it. Requires komodo-admin; never retried. Returns target, applied field, sensitive file path, and an operation id, not contents; reconcile with operations.status before further actions.",
+        "Replace one file's contents in files-on-host or repo mode; an empty string writes an empty file. Komodo owns file-path and mode enforcement. Komodo may retain submitted configuration. Never retried. Returns target, applied field, file path, and an operation id, not contents; reconcile with operations.status before further actions.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -469,13 +469,13 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksWebhookUpdate,
         "stacks.webhook.update",
-        "Set supplied webhook enabled and force-deploy flags; omitted flags stay unchanged. Changes future webhook handling without deploying now. Requires komodo-admin; never retried. Returns applied field names, not the secret; reconcile with stacks.webhook.status.",
+        "Set supplied webhook enabled and force-deploy flags; omitted flags stay unchanged. Changes future webhook handling without deploying now. Never retried. Returns applied field names, not the secret; reconcile with stacks.webhook.status.",
         ToolBehavior::mutation().destructive().requires_review(),
     ),
     config_write_spec(
         ToolKind::StacksWebhookSecretWrite,
         "stacks.webhook.secret.write",
-        "Set a custom webhook token from a completed native credential file, or explicitly restore inheritance of Core's shared token. Does not deploy. Komodo may retain the submitted secret in its own operation history. Requires komodo-admin; never retried. Returns the applied field name, not the value; reconcile with stacks.webhook.status for its source or the governed stacks.webhook.secret.read for a custom value.",
+        "Set a custom webhook token from a completed native credential file, or explicitly restore inheritance of Core's shared token. Does not deploy. Komodo may retain the submitted secret in its own operation history. Never retried. Returns the applied field name, not the value; reconcile with stacks.webhook.status for its source or the governed stacks.webhook.secret.read for a custom value.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
