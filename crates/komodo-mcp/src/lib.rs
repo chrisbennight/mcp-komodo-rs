@@ -260,7 +260,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::StacksConfigRead,
         "stacks.config.read",
-        "Read one stack's configuration shape: file mode, run directory, file paths, env-file path, webhook flags, and presence flags for Compose, environment, and commands. Excludes raw Compose, environment, commands, and the webhook secret value.",
+        "Read one stack's complete ordinary configuration and compatibility summary, including placement, repository references, update settings, file dependencies, Compose, environment, and commands. The literal webhook token is available through stacks.webhook.secret.read native files.",
     ),
     read_spec(
         ToolKind::StacksComposeRead,
@@ -659,6 +659,9 @@ struct EnvironmentWriteInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct CommandInput {
+    /// Core's shell execution setting; omit to use Core's command default.
+    #[serde(default)]
+    shell_mode: Option<bool>,
     /// Working directory for the command.
     #[serde(default)]
     /// At most 512 UTF-8 bytes with no control characters; empty is allowed.
@@ -1012,6 +1015,9 @@ struct ServiceDiagnostic {
     reason = "each boolean is an independent, separately reported configuration flag"
 )]
 struct StackConfigView {
+    /// Complete ordinary configuration, using Core field names. Literal token
+    /// bytes are available through stacks.webhook.secret.read native files.
+    configuration: StackConfigDetail,
     /// Stack name.
     name: String,
     /// Whether the stack sources its files from the host rather than the UI.
@@ -1047,11 +1053,17 @@ struct ComposeFileView {
     path: String,
     /// Full file contents.
     contents: String,
+    /// Services depending on this remote file, when Core reports them.
+    services: Option<Vec<String>>,
+    /// Action required by Core when this remote file changes.
+    requires: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct ComposeView {
+    /// Cache and deployment provenance reported by Core.
+    provenance: komodo_api::stacks::StackComposeProvenance,
     /// The requested source: configured, latest, or deployed.
     source: String,
     /// Bounded Compose files for the requested source.
@@ -1070,6 +1082,8 @@ struct EnvironmentView {
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct CommandView {
+    /// Core's shell execution setting, when reported.
+    shell_mode: Option<bool>,
     /// Working directory for the command.
     path: String,
     /// The command to run.
@@ -2452,6 +2466,7 @@ fn validate_command(input: CommandInput) -> Result<SystemCommand, McpError> {
     Ok(SystemCommand {
         path: input.path,
         command: input.command,
+        shell_mode: input.shell_mode,
     })
 }
 
@@ -2623,14 +2638,14 @@ fn normalize_stack_config(
     config: StackConfigDetail,
     window: CollectionWindow,
 ) -> StackConfigView {
-    let (file_paths, file_paths_page) = collection_page(Some(config.file_paths), window);
+    let (file_paths, file_paths_page) = collection_page(Some(config.file_paths.clone()), window);
     StackConfigView {
         name,
         files_on_host: config.files_on_host,
-        run_directory: config.run_directory,
+        run_directory: config.run_directory.clone(),
         file_paths,
         file_paths_page,
-        env_file_path: config.env_file_path,
+        env_file_path: config.env_file_path.clone(),
         webhook_enabled: config.webhook_enabled,
         webhook_force_deploy: config.webhook_force_deploy,
         webhook_secret_source: webhook_secret_source(&config.webhook_secret).into(),
@@ -2638,6 +2653,7 @@ fn normalize_stack_config(
         has_environment: !config.environment.is_empty(),
         has_pre_deploy: !config.pre_deploy.command.is_empty(),
         has_post_deploy: !config.post_deploy.command.is_empty(),
+        configuration: config,
     }
 }
 
@@ -2647,6 +2663,8 @@ fn compose_files(contents: Vec<ComposeFile>) -> Vec<ComposeFileView> {
         .map(|file| ComposeFileView {
             path: file.path,
             contents: file.contents,
+            services: file.services,
+            requires: file.requires,
         })
         .collect()
 }
@@ -2670,6 +2688,7 @@ fn normalize_compose(
                 Some(vec![ComposeFile {
                     path,
                     contents: detail.config.file_contents,
+                    ..ComposeFile::default()
                 }])
             }
         }
@@ -2678,6 +2697,7 @@ fn normalize_compose(
     };
     let (files, files_page) = collection_page(files, window);
     ComposeView {
+        provenance: detail.info.provenance,
         source: compose_source_label(source).into(),
         files: compose_files(files),
         files_page,
@@ -2687,10 +2707,12 @@ fn normalize_compose(
 fn normalize_commands(config: StackConfigDetail) -> CommandsView {
     CommandsView {
         pre_deploy: CommandView {
+            shell_mode: config.pre_deploy.shell_mode,
             path: config.pre_deploy.path,
             command: config.pre_deploy.command,
         },
         post_deploy: CommandView {
+            shell_mode: config.post_deploy.shell_mode,
             path: config.post_deploy.path,
             command: config.post_deploy.command,
         },
@@ -3406,21 +3428,48 @@ mod tests {
                             pre_deploy: SystemCommand {
                                 path: "stacks/gateway".into(),
                                 command: "echo pre".into(),
+                                shell_mode: Some(true),
                             },
                             post_deploy: SystemCommand::default(),
                             webhook_enabled: true,
                             webhook_secret: "sentinel-hook".into(),
                             webhook_force_deploy: false,
+                            facts: serde_json::from_value(json!({
+                                "server_id":"server-1", "swarm_id":"", "links":["https://service.example.test"],
+                                "project_name":"project", "auto_pull":false, "run_build":true,
+                                "poll_for_updates":true, "auto_update":false, "auto_update_all_services":false,
+                                "auto_update_skip_services":["database"], "destroy_before_deploy":false,
+                                "skip_secret_interp":true, "linked_repo":"repo-1", "git_provider":"git.example.test",
+                                "git_https":true, "git_account":"operator-reference", "repo":"operator/services",
+                                "branch":"main", "commit":"pinned-commit", "clone_path":"/repos/services",
+                                "reclone":false, "additional_env_files":[{"path":"extra.env","track":false},"legacy.env"],
+                                "config_files":[{"path":"settings.yaml","services":["api"],"requires":"Restart"}],
+                                "send_alerts":true, "registry_provider":"registry.example.test",
+                                "registry_account":"registry-reference", "extra_args":["--remove-orphans"],
+                                "build_extra_args":["--pull"], "compose_cmd_wrapper":"wrapper [[COMPOSE_COMMAND]]",
+                                "compose_cmd_wrapper_include":["config","up"], "ignore_services":["init"]
+                            })).expect("ordinary stack facts"),
                         },
                         info: StackComposeInfo {
                             deployed_contents: Some(vec![ComposeFile {
                                 path: "compose.yaml".into(),
                                 contents: "deployed-body".into(),
+                                ..ComposeFile::default()
                             }]),
                             remote_contents: Some(vec![ComposeFile {
                                 path: "compose.yaml".into(),
                                 contents: "latest-body".into(),
+                                services: Some(vec!["api".into()]),
+                                requires: Some("Restart".into()),
                             }]),
+                            provenance: serde_json::from_value(json!({
+                                "missing_files":["missing.yaml"], "deployed_project_name":"project",
+                                "deployed_hash":"deployed-hash", "deployed_message":"deployed message",
+                                "deployed_services":[{"service_name":"api","container_name":"project-api","image":"api:1","image_digest":"api@sha256:digest"}],
+                                "deployed_config":"resolved compose config", "latest_services":[],
+                                "remote_errors":[{"path":"missing.yaml","contents":"file was not found"}],
+                                "latest_hash":"latest-hash", "latest_message":"latest message"
+                            })).expect("compose provenance"),
                         },
                     })
                 } else if selector == "stack-2" {
@@ -5457,6 +5506,7 @@ mod tests {
             .map(|path| ComposeFile {
                 path,
                 contents: contents.clone(),
+                ..ComposeFile::default()
             })
             .collect();
         let compose = normalize_compose(
@@ -5466,6 +5516,7 @@ mod tests {
                 info: StackComposeInfo {
                     deployed_contents: Some(files),
                     remote_contents: None,
+                    ..StackComposeInfo::default()
                 },
             },
             next,
@@ -5811,11 +5862,27 @@ mod tests {
             .await;
             assert_eq!(view["source"], source);
             assert_eq!(view["files"][0]["contents"], expected);
+            for (key, expected) in json!({
+                "missing_files":["missing.yaml"], "deployed_project_name":"project",
+                "deployed_hash":"deployed-hash", "deployed_message":"deployed message",
+                "deployed_services":[{"service_name":"api","container_name":"project-api","image":"api:1","image_digest":"api@sha256:digest"}],
+                "deployed_config":"resolved compose config", "latest_services":[],
+                "remote_errors":[{"path":"missing.yaml","contents":"file was not found","services":null,"requires":null}],
+                "latest_hash":"latest-hash", "latest_message":"latest message"
+            }).as_object().unwrap() {
+                assert_eq!(&view["provenance"][key], expected, "preserves {key}");
+            }
+            if source == "latest" {
+                assert_eq!(view["files"][0]["services"], json!(["api"]));
+                assert_eq!(view["files"][0]["requires"], "Restart");
+            } else {
+                assert!(view["files"][0]["services"].is_null());
+            }
         }
     }
 
     #[tokio::test]
-    async fn config_read_reports_shape_without_raw_payloads() {
+    async fn config_read_preserves_ordinary_content_and_omits_only_the_literal_token() {
         let (config, trust) =
             dispatch_read("stacks.config.read", json!({ "selector": "stack-1" })).await;
         assert_eq!(config["runDirectory"], "stacks/gateway");
@@ -5825,11 +5892,58 @@ mod tests {
         assert_eq!(config["hasPreDeploy"], true);
         assert_eq!(config["hasPostDeploy"], false);
         assert_eq!(trust, json!({ "untrusted": true }));
-        // The shape view must not carry the raw secret, Compose, or environment.
         let serialized = config.to_string();
         assert!(!serialized.contains("sentinel-hook"));
-        assert!(!serialized.contains("sentinel-env"));
-        assert!(!serialized.contains("services:"));
+        let ordinary = &config["configuration"];
+        assert_eq!(ordinary["file_contents"], "services:\n  api: {}\n");
+        assert_eq!(ordinary["environment"], "TOKEN=sentinel-env\n");
+        assert_eq!(ordinary["pre_deploy"]["shell_mode"], true);
+        assert!(ordinary.get("webhook_secret").is_none());
+        for (key, expected) in json!({
+            "server_id":"server-1", "swarm_id":"", "links":["https://service.example.test"],
+            "project_name":"project", "auto_pull":false, "run_build":true,
+            "poll_for_updates":true, "auto_update":false, "auto_update_all_services":false,
+            "auto_update_skip_services":["database"], "destroy_before_deploy":false,
+            "skip_secret_interp":true, "linked_repo":"repo-1", "git_provider":"git.example.test",
+            "git_https":true, "git_account":"operator-reference", "repo":"operator/services",
+            "branch":"main", "commit":"pinned-commit", "clone_path":"/repos/services",
+            "reclone":false, "additional_env_files":[{"path":"extra.env","track":false},"legacy.env"],
+            "config_files":[{"path":"settings.yaml","services":["api"],"requires":"Restart"}],
+            "send_alerts":true, "registry_provider":"registry.example.test",
+            "registry_account":"registry-reference", "extra_args":["--remove-orphans"],
+            "build_extra_args":["--pull"], "compose_cmd_wrapper":"wrapper [[COMPOSE_COMMAND]]",
+            "compose_cmd_wrapper_include":["config","up"], "ignore_services":["init"]
+        }).as_object().unwrap() {
+            assert_eq!(&ordinary[key], expected, "preserves {key}");
+        }
+        let (absent, _) = dispatch_read("stacks.config.read", json!({"selector":"stack-2"})).await;
+        assert!(absent["configuration"]["auto_pull"].is_null());
+        assert!(absent["configuration"]["additional_env_files"].is_null());
+    }
+
+    #[tokio::test]
+    async fn command_intents_preserve_shell_mode_without_executing_locally() {
+        for shell_mode in [Some(true), Some(false), None] {
+            let admin = Arc::new(FakeApi::default());
+            let handler = KomodoMcp::new(Arc::new(FakeApi::default()), admin.clone());
+            let mut command = json!({"path":"stacks/api", "command":"$(ordinary-stored-command)"});
+            if let Some(value) = shell_mode {
+                command["shell_mode"] = json!(value);
+            }
+            handler
+                .dispatch(
+                    &CallToolRequestParams::new("stacks.commands.write").with_arguments(arguments(
+                        &json!({"selector":"stack-1","pre_deploy":command}),
+                    )),
+                )
+                .await
+                .expect("command stored through typed API");
+            let recorded = admin.recorded.lock().unwrap();
+            let command = recorded[0].pre_deploy.as_ref().unwrap();
+            assert_eq!(command.shell_mode, shell_mode);
+            assert_eq!(command.command, "$(ordinary-stored-command)");
+            assert!(recorded[0].post_deploy.is_none());
+        }
     }
 
     #[tokio::test]
@@ -5841,6 +5955,8 @@ mod tests {
         let (commands, _) =
             dispatch_read("stacks.commands.read", json!({ "selector": "stack-1" })).await;
         assert_eq!(commands["preDeploy"]["command"], "echo pre");
+        assert_eq!(commands["preDeploy"]["shellMode"], true);
+        assert!(commands["postDeploy"]["shellMode"].is_null());
         assert_eq!(commands["postDeploy"]["command"], "");
     }
 
