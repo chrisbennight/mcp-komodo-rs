@@ -40,7 +40,8 @@ approval policy. [See the tool reference](docs/tool-surface.md).
 You need Linux, Git, a C compiler/linker, Rust installed through rustup, and an
 MCP client that can launch a stdio server. To inspect your resources, you also
 need a reachable Komodo Core installation and read-only service-user credentials.
-The tested contract is Core 2.1.2; other versions need compatibility checks.
+The base wire contract is Core 2.1.2; resource and operation metadata models
+also cover Core 2.3.3 fields. Other versions need compatibility checks.
 This is an early project with no supported stable release line yet.
 
 ```sh

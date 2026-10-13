@@ -9,8 +9,8 @@ use std::{
 
 use komodo_api::{
     Action, ApiError, BuildInfo, ComposeFile, DeploymentInfo, KomodoApi, Log, MutationReceipt,
-    OperationItem, RepoInfo, ResourceListItem, ServerInfo, StackConfigDetail, StackConfigPatch,
-    StackDetail, StackInfo, StackService, SystemCommand,
+    OperationItem, RepoInfo, ResourceListItem, ResourceVersion, ServerInfo, StackConfigDetail,
+    StackConfigPatch, StackDetail, StackInfo, StackService, SystemCommand,
 };
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -278,22 +278,22 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::ServersSearch,
         "servers.search",
-        "Find servers by name or id and return only state, health, and version.",
+        "Find servers with normalized health and typed Core list facts, including addresses and public keys.",
     ),
     read_spec(
         ToolKind::ServersStatus,
         "servers.status",
-        "Get one server's state and health without addresses, keys, or runtime configuration.",
+        "Get one server's normalized health and typed Core list facts, including addresses, public keys, and alert metadata.",
     ),
     read_spec(
         ToolKind::StacksSearch,
         "stacks.search",
-        "Find stacks and return only state and aggregate service health signals.",
+        "Find stacks with normalized health and typed Core list facts, including images, placement, and repository provenance.",
     ),
     read_spec(
         ToolKind::StacksStatus,
         "stacks.status",
-        "Get one stack's normalized status without Compose, environment, image, or log data.",
+        "Get one stack's normalized health and typed Core list facts, including images, placement, and repository provenance.",
     ),
     sensitive_read_spec(
         ToolKind::StacksDiagnostics,
@@ -338,42 +338,42 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::DeploymentsSearch,
         "deployments.search",
-        "Find deployments and return only normalized state and update availability.",
+        "Find deployments with normalized health and typed Core list facts, including image, container name, and placement.",
     ),
     read_spec(
         ToolKind::DeploymentsStatus,
         "deployments.status",
-        "Get one deployment's normalized state without Docker runtime or image configuration.",
+        "Get one deployment's normalized health and typed Core list facts, including image and placement.",
     ),
     read_spec(
         ToolKind::BuildsSearch,
         "builds.search",
-        "Find builds and return only state and the last-build timestamp.",
+        "Find builds with normalized health and typed Core list facts, including version, builder, and repository provenance.",
     ),
     read_spec(
         ToolKind::BuildsStatus,
         "builds.status",
-        "Get one build's normalized status without repository or command configuration.",
+        "Get one build's normalized health and typed Core list facts, including version and repository provenance.",
     ),
     read_spec(
         ToolKind::ReposSearch,
         "repos.search",
-        "Find managed repositories and return only state and activity timestamps.",
+        "Find managed repositories with normalized health and typed Core list facts, including URLs, branch, placement, and commit provenance.",
     ),
     read_spec(
         ToolKind::ReposStatus,
         "repos.status",
-        "Get one repository's status without URLs, credentials, hooks, or commands.",
+        "Get one repository's normalized health and typed Core list facts, including URLs, branch, placement, and commit provenance.",
     ),
     read_spec(
         ToolKind::OperationsSearch,
         "operations.search",
-        "Search one bounded operation page without logs, operator identity, or config snapshots.",
+        "Search one bounded operation page with resource correlation, initiating user, version, and operation-specific data reported by Core.",
     ),
     read_spec(
         ToolKind::OperationsStatus,
         "operations.status",
-        "Get one operation's current status by its stable id without reading its logs or snapshots.",
+        "Get one operation by stable id with normalized outcome, resource correlation, initiating user, version, commit, and operation-specific data reported by Core. Command logs have their own typed read.",
     ),
     sensitive_read_spec(
         ToolKind::OperationsLogsRead,
@@ -908,7 +908,7 @@ struct SystemStatusOutput {
     reachable: bool,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct ServerStatus {
     /// Stable Komodo resource id.
@@ -921,6 +921,8 @@ struct ServerStatus {
     health: String,
     /// Periphery version when Komodo reports one.
     version: Option<String>,
+    /// Complete typed list facts reported by Core, including addresses and public keys.
+    resource: ResourceListItem<ServerInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -940,6 +942,8 @@ struct StackStatus {
     services_with_updates: usize,
     /// Whether the Compose project is unexpectedly absent on the target.
     project_missing: bool,
+    /// Complete typed list facts reported by Core, including source and deployed hashes.
+    resource: ResourceListItem<StackInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -955,6 +959,8 @@ struct DeploymentStatus {
     health: String,
     /// Whether Komodo reports a newer image for the configured tag.
     update_available: bool,
+    /// Complete typed list facts reported by Core, including image and placement.
+    resource: ResourceListItem<DeploymentInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -970,6 +976,8 @@ struct BuildStatus {
     health: String,
     /// Unix timestamp in milliseconds of the most recent build.
     last_built_at: i64,
+    /// Complete typed list facts reported by Core, including version and repository source.
+    resource: ResourceListItem<BuildInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -987,6 +995,8 @@ struct RepoStatus {
     last_pulled_at: i64,
     /// Unix timestamp in milliseconds of the most recent build.
     last_built_at: i64,
+    /// Complete typed list facts reported by Core, including branch and commit provenance.
+    resource: ResourceListItem<RepoInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -994,7 +1004,7 @@ struct RepoStatus {
 struct OperationStatus {
     /// Stable Komodo operation id.
     id: String,
-    /// Allowlisted operation kind.
+    /// Operation kind reported by Core, including future kinds.
     operation: String,
     /// Unix timestamp in milliseconds when the operation began.
     start_ts: i64,
@@ -1004,8 +1014,20 @@ struct OperationStatus {
     status: String,
     /// Accepted, running, succeeded, failed, or unknown; never infer failure while running.
     outcome: OperationOutcome,
-    /// Resource correlation reported by Core; null if unavailable or unsupported.
+    /// Resource correlation reported by Core; null when unavailable.
     target: Option<OperationTargetView>,
+    /// Initiating user id or automatic-operation source reported by Core.
+    operator: Option<String>,
+    /// Display name provided by list responses; absent from detail responses.
+    username: Option<String>,
+    /// Completion timestamp when reported by the upstream operation detail.
+    end_ts: Option<i64>,
+    /// Build or deployment version associated with the operation.
+    version: Option<ResourceVersion>,
+    /// Commit associated with the operation.
+    commit_hash: Option<String>,
+    /// Operation-specific source data reported by Core.
+    other_data: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, JsonSchema, PartialEq, Eq)]
@@ -1269,7 +1291,7 @@ search_output!(RepoSearchOutput, RepoStatus);
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct OperationSearchOutput {
-    /// Bounded operation metadata with all command output and snapshots removed.
+    /// One bounded page of typed operation facts reported by Core.
     items: Vec<OperationStatus>,
     /// Next Komodo update page after the current page is exhausted.
     next_page: Option<u32>,
@@ -2615,11 +2637,12 @@ fn normalize_server(item: ResourceListItem<ServerInfo>) -> ServerStatus {
         _ => "unhealthy",
     };
     ServerStatus {
-        id: item.id,
-        name: item.name,
-        state: item.info.state,
+        id: item.id.clone(),
+        name: item.name.clone(),
+        state: item.info.state.clone(),
         health: health.into(),
-        version: item.info.version,
+        version: item.info.version.clone(),
+        resource: item,
     }
 }
 
@@ -2641,13 +2664,14 @@ fn count_service_updates(services: &[StackService]) -> usize {
 fn normalize_stack(item: ResourceListItem<StackInfo>) -> StackStatus {
     let updates = count_service_updates(&item.info.services);
     StackStatus {
-        id: item.id,
-        name: item.name,
+        id: item.id.clone(),
+        name: item.name.clone(),
         health: stack_health(&item.info.state, item.info.project_missing).into(),
-        state: item.info.state,
+        state: item.info.state.clone(),
         service_count: item.info.services.len(),
         services_with_updates: updates,
         project_missing: item.info.project_missing,
+        resource: item,
     }
 }
 
@@ -2838,11 +2862,12 @@ fn normalize_deployment(item: ResourceListItem<DeploymentInfo>) -> DeploymentSta
         _ => "unhealthy",
     };
     DeploymentStatus {
-        id: item.id,
-        name: item.name,
-        state: item.info.state,
+        id: item.id.clone(),
+        name: item.name.clone(),
+        state: item.info.state.clone(),
         health: health.into(),
         update_available: item.info.update_available,
+        resource: item,
     }
 }
 
@@ -2854,11 +2879,12 @@ fn normalize_build(item: ResourceListItem<BuildInfo>) -> BuildStatus {
         _ => "unknown",
     };
     BuildStatus {
-        id: item.id,
-        name: item.name,
-        state: item.info.state,
+        id: item.id.clone(),
+        name: item.name.clone(),
+        state: item.info.state.clone(),
         health: health.into(),
         last_built_at: item.info.last_built_at,
+        resource: item,
     }
 }
 
@@ -2870,12 +2896,13 @@ fn normalize_repo(item: ResourceListItem<RepoInfo>) -> RepoStatus {
         _ => "unknown",
     };
     RepoStatus {
-        id: item.id,
-        name: item.name,
-        state: item.info.state,
+        id: item.id.clone(),
+        name: item.name.clone(),
+        state: item.info.state.clone(),
         health: health.into(),
         last_pulled_at: item.info.last_pulled_at,
         last_built_at: item.info.last_built_at,
+        resource: item,
     }
 }
 
@@ -2888,27 +2915,16 @@ fn normalize_operation(item: OperationItem) -> OperationStatus {
         success,
         status: item.status,
         outcome,
-        target: item.target.and_then(|target| {
-            (matches!(
-                target.kind.as_str(),
-                "System"
-                    | "Swarm"
-                    | "Server"
-                    | "Stack"
-                    | "Deployment"
-                    | "Build"
-                    | "Repo"
-                    | "Procedure"
-                    | "Action"
-                    | "Builder"
-                    | "Alerter"
-                    | "ResourceSync"
-            ) && !target.id.is_empty())
-            .then_some(OperationTargetView {
-                kind: target.kind,
-                id: target.id,
-            })
+        target: item.target.map(|target| OperationTargetView {
+            kind: target.kind,
+            id: target.id,
         }),
+        operator: item.operator,
+        username: item.username,
+        end_ts: item.end_ts,
+        version: item.version,
+        commit_hash: item.commit_hash,
+        other_data: item.other_data,
     }
 }
 
@@ -3226,7 +3242,17 @@ mod tests {
                     info: ServerInfo {
                         state: "Ok".into(),
                         version: Some("1.18.4".into()),
+                        address: Some("https://10.23.4.5:8120".into()),
+                        external_address: Some("https://server.example.test".into()),
+                        public_ip: Some("192.0.2.15".into()),
+                        public_key: Some("public-key-fixture".into()),
+                        attempted_public_key: Some("attempted-public-key-fixture".into()),
+                        region: Some("east".into()),
+                        send_cpu_alerts: Some(true),
+                        ..Default::default()
                     },
+                    template: Some(true),
+                    tags: Some(vec!["tag-production".into()]),
                 }])
             })
         }
@@ -3246,6 +3272,11 @@ mod tests {
                         name: "gateway".into(),
                         info: StackInfo {
                             state: "Running".into(),
+                            server_id: Some("server-1".into()),
+                            server_name: Some("mini".into()),
+                            repo_link: Some("https://git.example.test/operator/services".into()),
+                            branch: Some("main".into()),
+                            linked_repo: Some("repo-1".into()),
                             status: Some("running(2)".into()),
                             services: vec![
                                 StackService {
@@ -3263,7 +3294,10 @@ mod tests {
                             missing_files: vec![],
                             deployed_hash: Some("abc123".into()),
                             latest_hash: Some("abc123".into()),
+                            ..Default::default()
                         },
+                        template: Some(false),
+                        tags: Some(Vec::new()),
                     },
                     ResourceListItem {
                         id: "stack-2".into(),
@@ -3277,7 +3311,10 @@ mod tests {
                             missing_files: vec![],
                             deployed_hash: None,
                             latest_hash: None,
+                            ..Default::default()
                         },
+                        template: Some(false),
+                        tags: Some(Vec::new()),
                     },
                 ])
             })
@@ -3292,8 +3329,15 @@ mod tests {
                     name: "worker".into(),
                     info: DeploymentInfo {
                         state: "Not_Deployed".into(),
+                        custom_name: Some("worker-container".into()),
+                        image: Some("registry.example.test/worker:2".into()),
+                        server_id: Some("server-1".into()),
+                        build_id: Some("build-1".into()),
                         update_available: true,
+                        ..Default::default()
                     },
+                    template: Some(false),
+                    tags: Some(Vec::new()),
                 }])
             })
         }
@@ -3307,8 +3351,15 @@ mod tests {
                     name: "image".into(),
                     info: BuildInfo {
                         state: "Building".into(),
+                        builder_id: Some("builder-1".into()),
+                        repo_link: Some("https://git.example.test/operator/build".into()),
+                        built_hash: Some("build-commit".into()),
+                        image_registry_domain: Some("registry.example.test".into()),
                         last_built_at: 11,
+                        ..Default::default()
                     },
+                    template: Some(false),
+                    tags: Some(Vec::new()),
                 }])
             })
         }
@@ -3322,9 +3373,18 @@ mod tests {
                     name: "source".into(),
                     info: RepoInfo {
                         state: "Pulling".into(),
+                        repo_link: Some("https://git.example.test/operator/services".into()),
+                        branch: Some("main".into()),
+                        cloned_hash: Some("cloned-commit".into()),
+                        cloned_message: Some("Restore the service".into()),
+                        built_hash: Some("built-commit".into()),
+                        latest_hash: Some("latest-commit".into()),
                         last_pulled_at: 12,
                         last_built_at: 13,
+                        ..Default::default()
                     },
+                    template: Some(false),
+                    tags: Some(Vec::new()),
                 }])
             })
         }
@@ -3346,6 +3406,7 @@ mod tests {
                                 start_ts: 14,
                                 success: true,
                                 status: "Complete".into(),
+                                ..Default::default()
                             })
                             .collect(),
                         next_page: Some(3),
@@ -3363,6 +3424,7 @@ mod tests {
                         start_ts: 14,
                         success: true,
                         status: "Complete".into(),
+                        ..Default::default()
                     }],
                     next_page: match page {
                         0 => Some(1),
@@ -3384,6 +3446,7 @@ mod tests {
                         start_ts: 14,
                         success: true,
                         status: "Complete".into(),
+                        ..Default::default()
                     })
                 } else {
                     Err(ApiError::NotFound)
@@ -3613,6 +3676,8 @@ mod tests {
             resource_type: "Test".into(),
             name: name.into(),
             info,
+            template: Some(false),
+            tags: Some(Vec::new()),
         }
     }
 
@@ -3850,7 +3915,11 @@ mod tests {
                     "name": "mini",
                     "state": "Ok",
                     "health": "healthy",
-                    "version": null
+                    "version": null,
+                    "resource": {
+                        "id":"server-1", "type":"Server", "name":"mini",
+                        "info":{"state":"Ok", "version":null}
+                    }
                 }],
                 "nextOffset": null,
                 "truncated": false
@@ -4051,7 +4120,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_search_returns_only_the_allowlisted_contract() {
+    async fn server_search_preserves_address_public_keys_and_tags() {
         let request =
             CallToolRequestParams::new("servers.search").with_arguments(arguments(&json!({
                 "query": "MIN",
@@ -4059,20 +4128,76 @@ mod tests {
                 "offset": 0
             })));
         let result = handler().dispatch(&request).await.expect("search");
-        assert_eq!(
-            result.structured_content.expect("structured"),
-            json!({
-                "items": [{
-                    "id": "server-1",
-                    "name": "mini",
-                    "state": "Ok",
-                    "health": "healthy",
-                    "version": "1.18.4"
-                }],
-                "nextOffset": null,
-                "truncated": false
-            })
-        );
+        let output = result.structured_content.expect("structured");
+        let item = &output["items"][0];
+        assert_eq!(item["id"], "server-1");
+        assert_eq!(item["health"], "healthy");
+        assert_eq!(item["resource"]["template"], true);
+        assert_eq!(item["resource"]["tags"], json!(["tag-production"]));
+        let info = &item["resource"]["info"];
+        assert_eq!(info["address"], "https://10.23.4.5:8120");
+        assert_eq!(info["external_address"], "https://server.example.test");
+        assert_eq!(info["public_ip"], "192.0.2.15");
+        assert_eq!(info["public_key"], "public-key-fixture");
+        assert_eq!(info["attempted_public_key"], "attempted-public-key-fixture");
+        assert_eq!(info["region"], "east");
+        assert_eq!(info["send_cpu_alerts"], true);
+        assert_eq!(output["nextOffset"], Value::Null);
+        assert_eq!(output["truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn resource_status_preserves_placement_images_and_repository_provenance() {
+        for (tool, selector, expected) in [
+            (
+                "stacks.status",
+                "stack-1",
+                json!({
+                    "server_id":"server-1", "server_name":"mini", "branch":"main",
+                    "repo_link":"https://git.example.test/operator/services",
+                    "linked_repo":"repo-1", "deployed_hash":"abc123", "latest_hash":"abc123"
+                }),
+            ),
+            (
+                "deployments.status",
+                "deployment-1",
+                json!({
+                    "custom_name":"worker-container", "image":"registry.example.test/worker:2",
+                    "server_id":"server-1", "build_id":"build-1"
+                }),
+            ),
+            (
+                "builds.status",
+                "build-1",
+                json!({
+                    "builder_id":"builder-1", "repo_link":"https://git.example.test/operator/build",
+                    "built_hash":"build-commit", "image_registry_domain":"registry.example.test"
+                }),
+            ),
+            (
+                "repos.status",
+                "repo-1",
+                json!({
+                    "repo_link":"https://git.example.test/operator/services", "branch":"main",
+                    "cloned_hash":"cloned-commit", "cloned_message":"Restore the service",
+                    "built_hash":"built-commit", "latest_hash":"latest-commit"
+                }),
+            ),
+        ] {
+            let params = CallToolRequestParams::new(tool)
+                .with_arguments(arguments(&json!({"selector":selector})));
+            let output = handler()
+                .dispatch(&params)
+                .await
+                .expect("resource status")
+                .structured_content
+                .expect("structured status");
+            let info = &output["resource"]["info"];
+            for (key, expected_value) in expected.as_object().unwrap() {
+                assert_eq!(&info[key], expected_value, "{tool} preserves {key}");
+            }
+            assert_eq!(output["resource"]["id"], selector);
+        }
     }
 
     #[tokio::test]
@@ -4585,6 +4710,7 @@ mod tests {
                     ServerInfo {
                         state: state.into(),
                         version: None,
+                        ..Default::default()
                     },
                 )),
                 ServerStatus {
@@ -4593,6 +4719,15 @@ mod tests {
                     state: state.into(),
                     health: health.into(),
                     version: None,
+                    resource: resource(
+                        "server",
+                        "server",
+                        ServerInfo {
+                            state: state.into(),
+                            version: None,
+                            ..Default::default()
+                        }
+                    ),
                 }
             );
         }
@@ -4625,6 +4760,7 @@ mod tests {
                     missing_files: vec![],
                     deployed_hash: None,
                     latest_hash: None,
+                    ..Default::default()
                 },
             ));
             assert_eq!(normalized.health, health);
@@ -4647,6 +4783,7 @@ mod tests {
                 DeploymentInfo {
                     state: state.into(),
                     update_available: true,
+                    ..Default::default()
                 },
             ));
             assert_eq!(normalized.health, health);
@@ -4665,6 +4802,7 @@ mod tests {
                 BuildInfo {
                     state: state.into(),
                     last_built_at: 17,
+                    ..Default::default()
                 },
             ));
             assert_eq!(normalized.health, health);
@@ -4686,6 +4824,7 @@ mod tests {
                     state: state.into(),
                     last_pulled_at: 18,
                     last_built_at: 19,
+                    ..Default::default()
                 },
             ));
             assert_eq!(normalized.health, health);
@@ -4764,6 +4903,9 @@ mod tests {
                 name: format!("resource-{index:05}"),
                 resource_type: "Test".into(),
                 info: (),
+
+                template: Some(false),
+                tags: Some(Vec::new()),
             })
             .collect::<Vec<_>>();
         let page = search(
@@ -4862,6 +5004,9 @@ mod tests {
                 resource_type: "Test".into(),
                 name: name.into(),
                 info: (),
+
+                template: Some(false),
+                tags: Some(Vec::new()),
             }
         }
         fn name(item: ResourceListItem<()>) -> String {
@@ -4968,6 +5113,7 @@ mod tests {
             start_ts: 1,
             success: true,
             status: "Complete".into(),
+            ..Default::default()
         };
         assert!(operation_matches(&operation, None));
         assert!(operation_matches(&operation, Some("operation-abc")));
@@ -4991,6 +5137,7 @@ mod tests {
                 success,
                 status: status.into(),
                 target: None,
+                ..Default::default()
             };
             let output = serde_json::to_value(super::normalize_operation(item)).unwrap();
             assert_eq!(output["outcome"], expected);
@@ -5011,19 +5158,36 @@ mod tests {
     }
 
     #[test]
-    fn same_kind_operations_keep_distinct_resource_targets_without_extra_metadata() {
+    fn operation_metadata_keeps_authors_provenance_and_future_resource_kinds() {
         for (id, target) in [("operation-a", "stack-a"), ("operation-b", "stack-b")] {
             let item: OperationItem =
                 serde_json::from_value(json!({"id":id,"operation":"DeployStack",
                 "start_ts":1,"success":false,"status":"InProgress",
                 "target":{"type":"Stack","id":target,"secret":"SENTINEL_TARGET"},
-                "operator":"SENTINEL_OPERATOR","current_toml":"SENTINEL_CONFIG"}))
+                "operator":"SENTINEL_OPERATOR","username":"operator@example.test",
+                "current_toml":"SENTINEL_CONFIG","prev_toml":"previous document",
+                "commit_hash":"operation-commit","other_data":"source metadata"}))
                 .unwrap();
             let output = serde_json::to_value(super::normalize_operation(item)).unwrap();
             assert_eq!(output["id"], id);
             assert_eq!(output["target"], json!({"kind":"Stack","id":target}));
-            assert!(!output.to_string().contains("SENTINEL"));
+            assert_eq!(output["operator"], "SENTINEL_OPERATOR");
+            assert_eq!(output["username"], "operator@example.test");
+            assert_eq!(output["commitHash"], "operation-commit");
+            assert_eq!(output["otherData"], "source metadata");
         }
+        let item: OperationItem = serde_json::from_value(json!({
+            "id":"future-operation", "operation":"FutureOperation",
+            "start_ts":1, "success":true, "status":"Complete",
+            "target":{"type":"FutureResource", "id":"future-resource"}
+        }))
+        .unwrap();
+        let output = serde_json::to_value(super::normalize_operation(item)).unwrap();
+        assert_eq!(output["operation"], "FutureOperation");
+        assert_eq!(
+            output["target"],
+            json!({"kind":"FutureResource","id":"future-resource"})
+        );
     }
 
     #[test]
@@ -5074,6 +5238,7 @@ mod tests {
                     missing_files: missing,
                     deployed_hash: Some("aaa".into()),
                     latest_hash: Some("bbb".into()),
+                    ..Default::default()
                 },
             ),
             super::CollectionWindow::default(),
@@ -5107,6 +5272,7 @@ mod tests {
                     missing_files: vec![],
                     deployed_hash: None,
                     latest_hash: None,
+                    ..Default::default()
                 },
             ),
             super::CollectionWindow::default(),

@@ -3,6 +3,7 @@
 use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use reqwest::{Client as HttpClient, StatusCode, redirect::Policy};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -77,30 +78,141 @@ pub enum ApiError {
     ResponseTooLarge,
 }
 
-/// Minimal common resource metadata returned by list endpoints.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Common resource metadata returned by list endpoints.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct ResourceListItem<I> {
     pub id: String,
     #[serde(rename = "type")]
     pub resource_type: String,
     pub name: String,
+    #[serde(default)]
+    pub template: Option<bool>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
     pub info: I,
 }
 
-/// Server fields explicitly allowed through the MCP normalization boundary.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Server list facts reported by Core. Public keys and addresses are metadata.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub struct ServerInfo {
     pub state: String,
     pub version: Option<String>,
+    #[serde(default)]
+    pub err: Option<ReportedError>,
+    #[serde(default)]
+    pub stats: Option<SystemStats>,
+    #[serde(default)]
+    pub alerting_thresholds: Option<AlertingThresholds>,
+    #[serde(default)]
+    pub core_count: Option<u32>,
+    #[serde(default)]
+    pub logical_core_count: Option<u32>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub external_address: Option<String>,
+    #[serde(default)]
+    pub public_ip: Option<String>,
+    #[serde(default)]
+    pub public_key: Option<String>,
+    #[serde(default)]
+    pub attempted_public_key: Option<String>,
+    #[serde(default)]
+    pub send_unreachable_alerts: Option<bool>,
+    #[serde(default)]
+    pub send_cpu_alerts: Option<bool>,
+    #[serde(default)]
+    pub send_mem_alerts: Option<bool>,
+    #[serde(default)]
+    pub send_disk_alerts: Option<bool>,
+    #[serde(default)]
+    pub send_version_mismatch_alerts: Option<bool>,
+    #[serde(default)]
+    pub terminals_disabled: Option<bool>,
+    #[serde(default)]
+    pub container_terminals_disabled: Option<bool>,
 }
 
-/// Stack fields explicitly allowed through the MCP normalization boundary.
-///
-/// Compose contents, environment, and remote file bodies are never retained;
-/// only bounded state and diagnostic signals cross this boundary.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Core's structured diagnostic, retained as data rather than executable text.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ReportedError {
+    pub error: String,
+    #[serde(default)]
+    pub trace: Vec<String>,
+}
+
+/// Server alert thresholds, expressed as percentages.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+pub struct AlertingThresholds {
+    pub cpu_warning: f64,
+    pub cpu_critical: f64,
+    pub mem_warning: f64,
+    pub mem_critical: f64,
+    pub disk_warning: f64,
+    pub disk_critical: f64,
+}
+
+/// Core's current minimal server statistics; absent on older Core versions.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+pub struct SystemStats {
+    pub cpu_perc: f64,
+    pub load_average: LoadAverage,
+    pub mem_free_gb: f64,
+    pub mem_used_gb: f64,
+    pub mem_total_gb: f64,
+    pub mem_buff_cache_gb: f64,
+    pub mem_zfs_arc_gb: f64,
+    pub swap_total_gb: f64,
+    pub swap_used_gb: f64,
+    pub disk_total_gb: f64,
+    pub disk_used_gb: f64,
+    pub network_ingress_bytes: f64,
+    pub network_egress_bytes: f64,
+    pub polling_rate: String,
+    pub refresh_ts: i64,
+    pub refresh_list_ts: i64,
+}
+
+/// One-, five-, and fifteen-minute system load averages.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+pub struct LoadAverage {
+    pub one: f64,
+    pub five: f64,
+    pub fifteen: f64,
+}
+
+/// Stack list facts, including source and deployment provenance.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct StackInfo {
     pub state: String,
+    #[serde(default)]
+    pub swarm_id: Option<String>,
+    #[serde(default)]
+    pub swarm_name: Option<String>,
+    #[serde(default)]
+    pub server_id: Option<String>,
+    #[serde(default)]
+    pub server_name: Option<String>,
+    #[serde(default)]
+    pub files_on_host: Option<bool>,
+    #[serde(default)]
+    pub file_contents: Option<bool>,
+    #[serde(default)]
+    pub linked_repo: Option<String>,
+    #[serde(default)]
+    pub linked_repo_name: Option<String>,
+    #[serde(default)]
+    pub git_provider: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub repo_link: Option<String>,
+    #[serde(default)]
+    pub auto_update_all_services: Option<bool>,
     /// Short status text Komodo relays from Docker, when present.
     #[serde(default)]
     pub status: Option<String>,
@@ -119,9 +231,8 @@ pub struct StackInfo {
     pub latest_hash: Option<String>,
 }
 
-/// Bounded per-service diagnostic signals. The service name, image reference,
-/// and update signal are retained; environment, ports, and commands are not.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Per-service list facts reported by Core.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct StackService {
     #[serde(default)]
     pub service: String,
@@ -131,38 +242,110 @@ pub struct StackService {
     pub update_available: bool,
 }
 
-/// Deployment fields explicitly allowed through the MCP normalization boundary.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Deployment list facts reported by Core.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct DeploymentInfo {
     pub state: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub custom_name: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub swarm_id: Option<String>,
+    #[serde(default)]
+    pub swarm_name: Option<String>,
+    #[serde(default)]
+    pub server_id: Option<String>,
+    #[serde(default)]
+    pub server_name: Option<String>,
+    #[serde(default)]
+    pub build_id: Option<String>,
     #[serde(default)]
     pub update_available: bool,
 }
 
-/// Build fields explicitly allowed through the MCP normalization boundary.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Build list facts reported by Core.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct BuildInfo {
     pub state: String,
+    #[serde(default)]
+    pub version: Option<ResourceVersion>,
+    #[serde(default)]
+    pub builder_id: Option<String>,
+    #[serde(default)]
+    pub files_on_host: Option<bool>,
+    #[serde(default)]
+    pub dockerfile_contents: Option<bool>,
+    #[serde(default)]
+    pub linked_repo: Option<String>,
+    #[serde(default)]
+    pub linked_repo_name: Option<String>,
+    #[serde(default)]
+    pub git_provider: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub repo_link: Option<String>,
+    #[serde(default)]
+    pub built_hash: Option<String>,
+    #[serde(default)]
+    pub latest_hash: Option<String>,
+    #[serde(default)]
+    pub image_registry_domain: Option<String>,
     #[serde(default)]
     pub last_built_at: i64,
 }
 
-/// Repository fields explicitly allowed through the MCP normalization boundary.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Repository list facts reported by Core.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct RepoInfo {
     pub state: String,
+    #[serde(default)]
+    pub server_id: Option<String>,
+    #[serde(default)]
+    pub server_name: Option<String>,
+    #[serde(default)]
+    pub builder_id: Option<String>,
+    #[serde(default)]
+    pub git_provider: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub repo_link: Option<String>,
+    #[serde(default)]
+    pub cloned_hash: Option<String>,
+    #[serde(default)]
+    pub cloned_message: Option<String>,
+    #[serde(default)]
+    pub built_hash: Option<String>,
+    #[serde(default)]
+    pub latest_hash: Option<String>,
     #[serde(default)]
     pub last_pulled_at: i64,
     #[serde(default)]
     pub last_built_at: i64,
 }
 
-/// Minimal operation record; command output, config snapshots, and operator data are discarded.
+/// Numeric version associated with a build or operation.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ResourceVersion {
+    pub major: i32,
+    pub minor: i32,
+    pub patch: i32,
+}
+
+/// Operation facts returned by list and detail requests.
 ///
 /// Komodo serializes the update identifier as a bare string in list responses
 /// and as an extended-JSON `{ "$oid": ... }` object elsewhere, so the id accepts
 /// either form under both the `id` and `_id` keys.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct OperationItem {
     #[serde(alias = "_id", deserialize_with = "deserialize_object_id")]
     pub id: String,
@@ -170,13 +353,29 @@ pub struct OperationItem {
     pub start_ts: i64,
     pub success: bool,
     pub status: String,
-    /// Resource metadata only; no operator identity or configuration snapshot.
+    #[serde(default)]
+    pub operator: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub end_ts: Option<i64>,
+    #[serde(default)]
+    pub version: Option<ResourceVersion>,
+    #[serde(default)]
+    pub commit_hash: Option<String>,
+    #[serde(default)]
+    pub other_data: Option<String>,
+    #[serde(default)]
+    pub prev_toml: Option<String>,
+    #[serde(default)]
+    pub current_toml: Option<String>,
+    /// Resource correlation reported by Core, including future resource kinds.
     #[serde(default)]
     pub target: Option<OperationTarget>,
 }
 
-/// Allowlisted resource correlation carried by Komodo update lists and details.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Resource correlation carried by Komodo update lists and details.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct OperationTarget {
     #[serde(rename = "type")]
     pub kind: String,
@@ -736,8 +935,71 @@ mod tests {
         .expect("client")
     }
 
+    fn server_stats_fixture() -> serde_json::Value {
+        json!({
+            "cpu_perc":12.5, "load_average":{"one":1.5,"five":1.0,"fifteen":0.5},
+            "mem_free_gb":2.0, "mem_used_gb":4.0, "mem_total_gb":8.0,
+            "mem_buff_cache_gb":2.0, "mem_zfs_arc_gb":0.0,
+            "swap_total_gb":1.0, "swap_used_gb":0.0,
+            "disk_total_gb":100.0, "disk_used_gb":25.0,
+            "network_ingress_bytes":1000.0, "network_egress_bytes":500.0,
+            "polling_rate":"1-sec", "refresh_ts":100, "refresh_list_ts":90
+        })
+    }
+
+    #[test]
+    fn new_resource_facts_distinguish_omission_from_reported_empty_values() {
+        use super::{BuildInfo, DeploymentInfo, RepoInfo, ResourceListItem, ServerInfo, StackInfo};
+        fn check<T: serde::de::DeserializeOwned + serde::Serialize>(facts: &serde_json::Value) {
+            let absent: T = serde_json::from_value(json!({"state":"Unknown"})).unwrap();
+            let absent = serde_json::to_value(absent).unwrap();
+            let mut reported = facts.clone();
+            reported["state"] = json!("Unknown");
+            let reported: T = serde_json::from_value(reported).unwrap();
+            let reported = serde_json::to_value(reported).unwrap();
+            for (name, value) in facts.as_object().unwrap() {
+                assert!(
+                    absent[name].is_null(),
+                    "{name} must preserve upstream omission"
+                );
+                assert_eq!(
+                    &reported[name], value,
+                    "{name} must preserve reported values"
+                );
+            }
+        }
+        check::<ServerInfo>(&json!({"region":"", "send_unreachable_alerts":false,
+            "send_cpu_alerts":false,"send_mem_alerts":false,"send_disk_alerts":false,
+            "send_version_mismatch_alerts":false,"terminals_disabled":false,
+            "container_terminals_disabled":false}));
+        check::<StackInfo>(&json!({"swarm_id":"","swarm_name":"","server_id":"",
+            "server_name":"","files_on_host":false,"file_contents":false,
+            "linked_repo":"","linked_repo_name":"","git_provider":"","repo":"",
+            "branch":"","repo_link":"","auto_update_all_services":false}));
+        check::<DeploymentInfo>(&json!({"custom_name":"","image":"","swarm_id":"",
+            "swarm_name":"","server_id":"","server_name":""}));
+        check::<BuildInfo>(&json!({"builder_id":"","files_on_host":false,
+            "dockerfile_contents":false,"linked_repo":"","linked_repo_name":"",
+            "git_provider":"","repo":"","branch":"","repo_link":""}));
+        check::<RepoInfo>(&json!({"server_id":"","server_name":"","builder_id":"",
+            "git_provider":"","repo":"","branch":"","repo_link":""}));
+        let absent: ResourceListItem<ServerInfo> = serde_json::from_value(json!({
+            "id":"s","name":"server","type":"Server","info":{"state":"Unknown"}
+        }))
+        .unwrap();
+        assert_eq!(absent.template, None);
+        assert_eq!(absent.tags, None);
+        let reported: ResourceListItem<ServerInfo> = serde_json::from_value(json!({
+            "id":"s","name":"server","type":"Server","template":false,"tags":[],
+            "info":{"state":"Unknown"}
+        }))
+        .unwrap();
+        assert_eq!(reported.template, Some(false));
+        assert_eq!(reported.tags, Some(Vec::new()));
+    }
+
     #[tokio::test]
-    async fn list_servers_uses_the_typed_envelope_and_discards_sensitive_fields() {
+    async fn list_servers_preserves_addresses_public_keys_and_resource_metadata() {
         let server = MockServer::start().await;
         let mut resources = (0..60)
             .map(|index| {
@@ -753,11 +1015,26 @@ mod tests {
             "id": "server-last",
             "type": "Server",
             "name": "z-target-server",
+            "template": true,
+            "tags": ["tag-production", "tag-east"],
             "config": { "address": "SENTINEL_PRIVATE_ADDRESS" },
             "info": {
                 "state": "Ok",
                 "version": "1.18.4",
-                "public_key": "SENTINEL_PUBLIC_KEY"
+                "address": "https://10.23.4.5:8120",
+                "external_address": "https://server.example.test",
+                "public_ip": "192.0.2.15",
+                "region": "east",
+                "public_key": "SENTINEL_PUBLIC_KEY",
+                "core_count": 4,
+                "logical_core_count": 8,
+                "err": {"error":"dial address did not respond", "trace":["server reachability"]},
+                "alerting_thresholds": {
+                    "cpu_warning":80.0, "cpu_critical":95.0,
+                    "mem_warning":80.0, "mem_critical":95.0,
+                    "disk_warning":80.0, "disk_critical":95.0
+                },
+                "stats": server_stats_fixture()
             }
         }));
         Mock::given(method("POST"))
@@ -787,8 +1064,37 @@ mod tests {
             .expect("target beyond the default resource page");
         assert_eq!(target.id, "server-last");
         assert_eq!(target.info.state, "Ok");
-        let normalized = format!("{result:?}");
-        assert!(!normalized.contains("SENTINEL"));
+        assert_eq!(
+            target.info.address.as_deref(),
+            Some("https://10.23.4.5:8120")
+        );
+        assert_eq!(
+            target.info.external_address.as_deref(),
+            Some("https://server.example.test")
+        );
+        assert_eq!(target.info.public_ip.as_deref(), Some("192.0.2.15"));
+        assert_eq!(
+            target.info.public_key.as_deref(),
+            Some("SENTINEL_PUBLIC_KEY")
+        );
+        assert_eq!(target.info.region.as_deref(), Some("east"));
+        assert_eq!(target.template, Some(true));
+        assert_eq!(
+            target.tags.as_ref().unwrap(),
+            &["tag-production", "tag-east"]
+        );
+        assert_eq!(target.info.core_count, Some(4));
+        assert_eq!(target.info.logical_core_count, Some(8));
+        let stats = target.info.stats.as_ref().expect("Core statistics");
+        assert_eq!(serde_json::to_value(stats).unwrap(), server_stats_fixture());
+        assert_eq!(
+            serde_json::to_value(target.info.alerting_thresholds.as_ref().unwrap()).unwrap()["cpu_critical"],
+            json!(95.0)
+        );
+        assert_eq!(
+            target.info.err.as_ref().unwrap().error,
+            "dial address did not respond"
+        );
     }
 
     #[tokio::test]
@@ -861,7 +1167,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_update_reads_one_operation_by_stable_id_and_discards_sensitive_fields() {
+    async fn get_update_preserves_author_and_configuration_documents_by_stable_id() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/read"))
@@ -876,9 +1182,14 @@ mod tests {
                 "start_ts": 99,
                 "success": true,
                 "status": "Complete",
-                "logs": [{ "stdout": "SENTINEL_SECRET" }],
+                "logs": [{ "stdout": "separate command log" }],
                 "current_toml": "SENTINEL_CONFIG",
-                "operator": "SENTINEL_USER"
+                "prev_toml": "previous configuration document",
+                "operator": "SENTINEL_USER",
+                "end_ts": 100,
+                "version": {"major": 2, "minor": 3, "patch": 3},
+                "commit_hash": "deployed-commit",
+                "other_data": "operation-specific facts"
             })))
             .expect(1)
             .mount(&server)
@@ -892,7 +1203,19 @@ mod tests {
         let target = operation.target.as_ref().expect("resource target");
         assert_eq!(target.kind, "Stack");
         assert_eq!(target.id, "stack-1");
-        assert!(!format!("{operation:?}").contains("SENTINEL"));
+        assert_eq!(operation.operator.as_deref(), Some("SENTINEL_USER"));
+        assert_eq!(operation.current_toml.as_deref(), Some("SENTINEL_CONFIG"));
+        assert_eq!(
+            operation.prev_toml.as_deref(),
+            Some("previous configuration document")
+        );
+        assert_eq!(operation.end_ts, Some(100));
+        assert_eq!(operation.version.expect("reported version").patch, 3);
+        assert_eq!(operation.commit_hash.as_deref(), Some("deployed-commit"));
+        assert_eq!(
+            operation.other_data.as_deref(),
+            Some("operation-specific facts")
+        );
     }
 
     #[test]
