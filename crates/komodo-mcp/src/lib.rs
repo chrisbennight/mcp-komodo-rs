@@ -1,6 +1,7 @@
 //! MCP catalog, normalization, and dispatch for Komodo.
 
 pub mod execution;
+pub mod files;
 
 use std::{
     borrow::Cow,
