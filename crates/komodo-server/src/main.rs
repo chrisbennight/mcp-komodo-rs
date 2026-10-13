@@ -24,7 +24,7 @@ use tracing::info;
     reason = "Clap models mutually exclusive command-line flags as booleans"
 )]
 struct Args {
-    /// Serve only ordinary status tools over local stdin/stdout, without gateway or admin credentials.
+    /// Serve the selected capability profile over local stdin/stdout without gateway settings.
     #[arg(long, conflicts_with_all = ["healthcheck", "emit_gateway_manifest", "emit_tools_json"])]
     stdio: bool,
     /// Check only the local liveness endpoint and exit.
@@ -39,8 +39,8 @@ struct Args {
     /// Print source classification expectations for deployment validation, without credentials.
     #[arg(long, conflicts_with_all = ["stdio", "healthcheck", "emit_gateway_manifest", "emit_tools_json"])]
     emit_gateway_contract_json: bool,
-    /// HTTP/export capabilities: status, read-only, operations, or full. User authorization remains separate.
-    #[arg(long, default_value = "full", conflicts_with_all = ["stdio", "healthcheck"]) ]
+    /// Process/export capabilities: status, read-only, operations, or full. Authorization remains separate.
+    #[arg(long, default_value = "full", conflicts_with = "healthcheck")]
     tool_profile: ToolProfile,
 }
 
@@ -79,10 +79,14 @@ async fn run() -> Result<()> {
         return healthcheck().await;
     }
     if args.stdio {
-        return serve_stdio().await;
+        return serve_stdio(args.tool_profile).await;
     }
 
-    let settings = Settings::from_env().context("invalid server configuration")?;
+    let settings = match args.tool_profile {
+        ToolProfile::Status | ToolProfile::ReadOnly => Settings::read_only_from_env(),
+        ToolProfile::Operations | ToolProfile::Full => Settings::from_env(),
+    }
+    .context("invalid server configuration")?;
     diagnostics::init(&settings.log_level).map_err(|_| anyhow::anyhow!("invalid log filter"))?;
 
     let read: Arc<dyn KomodoApi> = Arc::new(Client::new(
@@ -90,12 +94,18 @@ async fn run() -> Result<()> {
         settings.read_credentials.clone(),
         settings.upstream_timeout,
     )?);
-    let admin: Arc<dyn KomodoApi> = Arc::new(Client::new(
-        settings.upstream_url.clone(),
-        settings.admin_credentials.clone(),
-        settings.upstream_timeout,
-    )?);
-    let handler = KomodoMcp::new(read, admin).with_tool_profile(args.tool_profile);
+    let handler = match &settings.admin_credentials {
+        Some(credentials) => KomodoMcp::new(
+            read,
+            Arc::new(Client::new(
+                settings.upstream_url.clone(),
+                credentials.clone(),
+                settings.upstream_timeout,
+            )?),
+        ),
+        None => KomodoMcp::read_only(read),
+    }
+    .with_tool_profile(args.tool_profile);
     let cancellation = CancellationToken::new();
     let router = build_router(&settings, handler, &cancellation)?;
     let address: SocketAddr = format!("{}:{}", settings.host, settings.port)
@@ -120,28 +130,46 @@ async fn run() -> Result<()> {
     }
 }
 
-async fn serve_stdio() -> Result<()> {
+async fn serve_stdio(profile: ToolProfile) -> Result<()> {
     let settings = komodo_server::config::ReadSettings::from_env()
-        .map_err(|_| anyhow::anyhow!("invalid status-only connection configuration"))?;
+        .map_err(|_| anyhow::anyhow!("invalid upstream connection configuration"))?;
+    let administrative_credentials = match profile {
+        ToolProfile::Status | ToolProfile::ReadOnly => None,
+        ToolProfile::Operations | ToolProfile::Full => {
+            komodo_server::config::administrative_credentials_from_env()
+                .map_err(|_| anyhow::anyhow!("invalid administrative credential configuration"))?
+        }
+    };
+    let upstream_url = settings.upstream_url.clone();
     let read = Arc::new(
         Client::new(
             settings.upstream_url,
             settings.credentials,
             settings.upstream_timeout,
         )
-        .map_err(|_| anyhow::anyhow!("invalid status-only upstream configuration"))?,
+        .map_err(|_| anyhow::anyhow!("invalid upstream configuration"))?,
     );
+    let handler = match administrative_credentials {
+        Some(credentials) => KomodoMcp::new(
+            read,
+            Arc::new(
+                Client::new(upstream_url, credentials, settings.upstream_timeout).map_err(
+                    |_| anyhow::anyhow!("invalid administrative upstream configuration"),
+                )?,
+            ),
+        ),
+        None => KomodoMcp::read_only(read),
+    }
+    .with_tool_profile(profile);
     // No tracing subscriber is installed: SDK diagnostics may include peer input.
     // stdout belongs exclusively to the MCP protocol in this mode.
     let transport =
         komodo_server::stdio::BoundedStdio::new(tokio::io::stdin(), tokio::io::stdout());
-    let service = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        KomodoMcp::status_only(read).serve(transport),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("MCP initialization timed out"))?
-    .map_err(|_| anyhow::anyhow!("MCP initialization failed"))?;
+    let service =
+        tokio::time::timeout(std::time::Duration::from_secs(30), handler.serve(transport))
+            .await
+            .map_err(|_| anyhow::anyhow!("MCP initialization timed out"))?
+            .map_err(|_| anyhow::anyhow!("MCP initialization failed"))?;
     service
         .waiting()
         .await

@@ -5,9 +5,9 @@ use serde_json::Value;
 #[test]
 fn binary_exports_selected_profiles_without_runtime_credentials() {
     for (profile, expected_count) in [
-        ("status", 14),
+        ("status", 22),
         ("read-only", 22),
-        ("operations", 22),
+        ("operations", 30),
         ("full", 37),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_komodo-mcp-rs"))
@@ -56,7 +56,6 @@ fn binary_exports_selected_profiles_without_runtime_credentials() {
     }
     for args in [
         vec!["--emit-tools-json", "--tool-profile", "unknown"],
-        vec!["--stdio", "--tool-profile", "full"],
         vec!["--healthcheck", "--emit-gateway-manifest"],
         vec!["--emit-gateway-contract-json", "--emit-tools-json"],
         vec!["--emit-gateway-contract-json", "--stdio"],

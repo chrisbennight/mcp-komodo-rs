@@ -270,8 +270,9 @@ mod tests {
             upstream_timeout: Duration::from_secs(2),
             read_credentials: Credentials::new("read".into(), "secret".into())
                 .expect("read credentials"),
-            admin_credentials: Credentials::new("admin".into(), "secret".into())
-                .expect("admin credentials"),
+            admin_credentials: Some(
+                Credentials::new("admin".into(), "secret".into()).expect("admin credentials"),
+            ),
             allowed_hosts: vec!["localhost".into()],
             allowed_origins: Vec::new(),
             request_timeout: Duration::from_secs(2),

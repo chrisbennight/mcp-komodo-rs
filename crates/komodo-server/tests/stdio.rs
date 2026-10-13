@@ -7,7 +7,7 @@ use tokio::{
 };
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{body_partial_json, header, method, path},
 };
 
 async fn reply(reader: &mut BufReader<tokio::process::ChildStdout>) -> Value {
@@ -20,7 +20,7 @@ async fn reply(reader: &mut BufReader<tokio::process::ChildStdout>) -> Value {
 }
 
 #[tokio::test]
-async fn actual_binary_initializes_lists_and_calls_status_without_gateway_or_admin_secrets() {
+async fn actual_binary_reads_status_and_content_without_gateway_or_admin_secrets() {
     for filter in [
         "off",
         "error",
@@ -30,20 +30,47 @@ async fn actual_binary_initializes_lists_and_calls_status_without_gateway_or_adm
         "trace",
         "rmcp=trace",
     ] {
-        stdio_status_with_log_filter(filter).await;
+        stdio_reads_with_log_filter(filter, "full").await;
     }
+    stdio_reads_with_log_filter("trace", "read-only").await;
 }
 
-async fn stdio_status_with_log_filter(filter: &str) {
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keep the real process initialization, reads, mutation rejection, and diagnostic checks in one scenario."
+)]
+async fn stdio_reads_with_log_filter(filter: &str, profile: &str) {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/read"))
+        .and(body_partial_json(json!({"type":"GetVersion"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":"2.1.2"})))
         .expect(1)
         .mount(&upstream)
         .await;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_komodo-mcp-rs"))
-        .arg("--stdio")
+    Mock::given(method("POST"))
+        .and(path("/read"))
+        .and(header("x-api-key", "synthetic-read-key"))
+        .and(body_partial_json(json!({"type":"ListStacks"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id":"stack-1","type":"Stack","name":"stack","info":{"state":"running","services":[]}}
+        ])))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/read"))
+        .and(header("x-api-key", "synthetic-read-key"))
+        .and(body_partial_json(json!({"type":"GetStack"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config":{"environment":"TEST_MODE=available\n"}, "info":{}
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_komodo-mcp-rs"));
+    command.args(["--stdio", "--tool-profile", profile]);
+    command
         .env_clear()
         .env("KOMODO_MCP_READ_API_KEY", "synthetic-read-key")
         .env("KOMODO_MCP_READ_API_SECRET", "synthetic-read-secret")
@@ -53,9 +80,11 @@ async fn stdio_status_with_log_filter(filter: &str) {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("start binary");
+        .kill_on_drop(true);
+    if profile == "read-only" {
+        command.env("KOMODO_MCP_ADMIN_API_KEY", "unused-incomplete-key");
+    }
+    let mut child = command.spawn().expect("start binary");
     let mut input = child.stdin.take().unwrap();
     let mut output = BufReader::new(child.stdout.take().unwrap());
     let initialize = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
@@ -73,6 +102,14 @@ async fn stdio_status_with_log_filter(filter: &str) {
     let catalog = reply(&mut output).await;
     let tools = catalog["result"]["tools"].as_array().expect("tools");
     assert!(tools.iter().any(|tool| tool["name"] == "system.status"));
+    for name in [
+        "stacks.config.read",
+        "stacks.compose.read",
+        "stacks.environment.read",
+        "stacks.logs.tail",
+    ] {
+        assert!(tools.iter().any(|tool| tool["name"] == name));
+    }
     for tool in tools {
         assert_eq!(tool["annotations"]["readOnlyHint"], true);
     }
@@ -81,8 +118,13 @@ async fn stdio_status_with_log_filter(filter: &str) {
         (4, "stacks.stop"),
         (5, "stacks.environment.read"),
     ] {
+        let args = if id == 5 {
+            json!({"selector":"stack"})
+        } else {
+            json!({})
+        };
         let call = json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
-            "params":{"name":name,"arguments":{}}});
+            "params":{"name":name,"arguments":args}});
         input
             .write_all(format!("{call}\n").as_bytes())
             .await
@@ -91,8 +133,14 @@ async fn stdio_status_with_log_filter(filter: &str) {
         if id == 3 {
             assert_eq!(response["result"]["structuredContent"]["reachable"], true);
             assert_eq!(response["result"]["structuredContent"]["version"], "2.1.2");
-        } else {
+        } else if id == 4 {
             assert_eq!(response["error"]["code"], -32601);
+        } else {
+            assert!(response.get("error").is_none(), "{response}");
+            assert_eq!(
+                response["result"]["structuredContent"]["environment"],
+                "TEST_MODE=available\n"
+            );
         }
     }
     drop(input);

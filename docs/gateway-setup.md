@@ -4,7 +4,7 @@ The HTTP server requires a gateway that implements the identity and policy
 contract below. An ordinary MCP client cannot connect directly using only a
 Komodo API key. The service does not implement OAuth discovery or interactive
 login. This guide describes integration prerequisites, not a standalone client
-quickstart. For a local client, use the [status-only quickstart](quickstart.md).
+quickstart. For a local client, use the [read-only quickstart](quickstart.md).
 
 ## Prepare Komodo access
 
