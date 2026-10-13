@@ -35,7 +35,6 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const MAX_QUERY_BYTES: usize = 128;
 const MAX_SELECTOR_BYTES: usize = 128;
 const MAX_OFFSET: u16 = 10_000;
-const MAX_OPERATION_PAGE: u32 = 100;
 /// Default Compose files and operation-log records selected from a bounded response.
 const DEFAULT_CONTENT_ITEMS: usize = 250;
 const MAX_COLLECTION_OFFSET: u32 = 2_097_152;
@@ -869,9 +868,9 @@ struct OperationsSearchInput {
     #[serde(default)]
     #[schemars(range(max = MAX_OFFSET))]
     offset: u16,
-    /// Bounded Komodo update page; page zero is newest.
+    /// Komodo update page; page zero is newest. Each request fetches one bounded page.
     #[serde(default)]
-    #[schemars(range(max = MAX_OPERATION_PAGE))]
+    #[schemars(range(max = u32::MAX))]
     page: u32,
     /// ASCII-case-insensitive substring matched against operation id or kind.
     /// At most 128 UTF-8 bytes before trimming; no control characters.
@@ -1785,7 +1784,6 @@ impl KomodoMcp {
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<OperationsSearchInput>(params)?;
-        validate_page(input.page)?;
         validate_limit(input.limit)?;
         if input.offset > MAX_OFFSET {
             return Err(McpError::invalid_params(
@@ -1795,7 +1793,7 @@ impl KomodoMcp {
         }
         let query = validate_query(input.query.as_deref())?;
         let page = self.read.operations(input.page).await.map_err(api_error)?;
-        let next_page = bounded_next_page(page.next_page)?;
+        let next_page = page.next_page;
         let matches = page
             .operations
             .into_iter()
@@ -2487,25 +2485,6 @@ fn validate_limit(limit: usize) -> Result<(), McpError> {
     }
 }
 
-fn validate_page(page: u32) -> Result<(), McpError> {
-    if page <= MAX_OPERATION_PAGE {
-        Ok(())
-    } else {
-        Err(McpError::invalid_params("page must not exceed 100", None))
-    }
-}
-
-fn bounded_next_page(next_page: Option<u32>) -> Result<Option<u32>, McpError> {
-    if next_page.is_some_and(|page| page > MAX_OPERATION_PAGE) {
-        Err(McpError::internal_error(
-            "Komodo returned an unusable pagination cursor",
-            None,
-        ))
-    } else {
-        Ok(next_page)
-    }
-}
-
 fn validate_query(query: Option<&str>) -> Result<Option<String>, McpError> {
     if query.is_some_and(|value| value.len() > MAX_QUERY_BYTES || has_control(value)) {
         return Err(McpError::invalid_params(
@@ -2975,10 +2954,9 @@ mod tests {
     use super::{
         ACTION_METADATA_KEY, JSON_SCHEMA_TYPES, KomodoMcp, MCP_PROTOCOL_VERSION, SearchInput,
         ServerStatus, TOOL_REGISTRY, TRUST_ANNOTATIONS_KEY, ToolBehavior, ToolSpec,
-        bounded_next_page, normalize_build, normalize_deployment, normalize_repo, normalize_server,
-        normalize_stack, normalize_stack_diagnostics, normalize_type_unions,
-        normalize_webhook_secret, operation_matches, search, select, trust_annotated,
-        validate_page, validate_query, validate_selector,
+        normalize_build, normalize_deployment, normalize_repo, normalize_server, normalize_stack,
+        normalize_stack_diagnostics, normalize_type_unions, normalize_webhook_secret,
+        operation_matches, search, select, trust_annotated, validate_query, validate_selector,
     };
 
     const BOOLEAN_SCHEMA_KEYWORDS: [&str; 4] = [
@@ -3375,7 +3353,11 @@ mod tests {
                 }
                 Ok(OperationPage {
                     operations: vec![OperationItem {
-                        id: "listed-operation".into(),
+                        id: if page > 100 {
+                            format!("historical-operation-{page}")
+                        } else {
+                            "listed-operation".into()
+                        },
                         operation: "DeployStack".into(),
                         target: None,
                         start_ts: 14,
@@ -4197,7 +4179,8 @@ mod tests {
             }
         }
         cases.extend([
-            ("operations.search", json!({"page":101})),
+            ("operations.search", json!({"page":u64::from(u32::MAX) + 1})),
+            ("operations.search", json!({"page":-1})),
             ("operations.status", json!({"operation_id":""})),
             (
                 "operations.logs.read",
@@ -4292,9 +4275,17 @@ mod tests {
             &schema("operations.search"),
             &json!({"page":100})
         ));
-        assert!(!validates(
+        assert!(validates(
             &schema("operations.search"),
             &json!({"page":101})
+        ));
+        assert!(validates(
+            &schema("operations.search"),
+            &json!({"page":u32::MAX})
+        ));
+        assert!(!validates(
+            &schema("operations.search"),
+            &json!({"page":u64::from(u32::MAX) + 1})
         ));
         // The deprecated stable-id lookup page remains ignored, without a new bound.
         assert!(validates(
@@ -4376,14 +4367,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operation_search_never_advertises_an_unusable_next_page() {
-        let request =
-            CallToolRequestParams::new("operations.search").with_arguments(arguments(&json!({
-                "page": 100,
-                "query": null,
-                "limit": 20
-            })));
-        assert!(handler().dispatch(&request).await.is_err());
+    async fn operation_history_remains_reachable_beyond_the_former_page_horizon() {
+        for (page, expected_id, next_page) in [
+            (100, "listed-operation".to_owned(), Some(101)),
+            (101, "historical-operation-101".to_owned(), None),
+            (u32::MAX, format!("historical-operation-{}", u32::MAX), None),
+        ] {
+            let read = Arc::new(FakeApi::default());
+            let handler = KomodoMcp::status_only(read.clone());
+            let request = CallToolRequestParams::new("operations.search")
+                .with_arguments(arguments(&json!({"page":page})));
+            let output = handler
+                .dispatch(&request)
+                .await
+                .expect("upstream page is reachable")
+                .structured_content
+                .expect("structured page");
+            assert_eq!(output["items"][0]["id"], expected_id);
+            assert_eq!(output["nextPage"], json!(next_page));
+            assert_eq!(
+                read.read_attempts.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "history depth does not add automatic traversal"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4421,16 +4428,6 @@ mod tests {
                 json!("page-operation-2")
             ]
         );
-    }
-
-    #[test]
-    fn operation_pagination_accepts_only_usable_cursors() {
-        assert_eq!(bounded_next_page(None).expect("terminal page"), None);
-        assert_eq!(
-            bounded_next_page(Some(100)).expect("maximum usable next page"),
-            Some(100)
-        );
-        assert!(bounded_next_page(Some(101)).is_err());
     }
 
     #[test]
@@ -4933,8 +4930,6 @@ mod tests {
             Some("mini".into())
         );
         assert_eq!(validate_query(Some("  ")).expect("empty query"), None);
-        assert!(validate_page(100).is_ok());
-        assert!(validate_page(101).is_err());
         assert!(
             search(
                 resources.clone(),

@@ -51,7 +51,8 @@ Resource pages never advertise an offset beyond 10000. `truncated: true` means
 matching items remain beyond that supported range; narrow the query. Each
 request fetches the bounded upstream inventory before local filtering, so an
 upstream body larger than two MiB still fails rather than silently truncating.
-`operations.search` page indices are capped at 100. Searches return `nextOffset` for
+`operations.search` accepts the upstream unsigned page index and fetches one
+bounded page per request, without imposing a history horizon. Searches return `nextOffset` for
 remaining matches within the same page; follow it before `nextPage`, then reset
 offset to zero when changing pages. Page contents can change as new operations
 arrive, so these cursors are not snapshot guarantees. `operations.status`
