@@ -59,9 +59,10 @@ command arguments, logs, or health output. Host users with Docker inspection
 access remain inside the trusted infrastructure boundary and can inspect a
 container's environment.
 
-An explicitly authorized secret-read tool may return a stack-specific value to
-its caller. The value must not be copied into MCP or gateway logs, errors,
-metrics, approvals, or audit payloads. An inherited Core secret is reported as
+Literal password and token values use [native file transfer](file-transfers.md)
+outside model context in both directions. Tool arguments and results contain
+file metadata rather than credential bytes. Values must not be copied into MCP
+or gateway logs, errors, metrics, approvals, or audit payloads. An inherited Core secret is reported as
 unavailable because the existing Komodo API does not expose its effective
 value; the MCP server does not bypass Komodo through Infisical or direct
 control-plane access.

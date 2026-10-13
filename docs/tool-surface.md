@@ -62,7 +62,8 @@ returns bounded operational signals — state, Docker status text, missing Compo
 file paths, and per-service image and update flags, with 250 entries per collection
 by default — and is classified sensitive so its results are labeled accordingly.
 The governed sensitive reads return bounded configuration, Compose, environment,
-command, log, and webhook-secret content labeled sensitive; a stack that inherits
+command, and log content labeled sensitive. Custom webhook tokens use native
+file transfer outside model context; a stack that inherits
 its webhook secret reports `source: "inherited"` with `valueAvailable: false` and
 never fetches the shared value. `stacks.logs.tail` accepts 1-5000 lines and up to
 50 named services. Upstream response bodies are streamed into a two-mebibyte
@@ -152,12 +153,16 @@ configured, latest, or deployed source. `stacks.environment.read` and
 `stacks.commands.read` return the raw environment and pre/post-deploy commands.
 `stacks.webhook.status` reports whether the webhook is enabled, whether it forces
 deploy, and whether its secret is custom or inherited. `stacks.webhook.secret.read`
-returns a custom secret value; a stack that inherits Komodo Core's shared secret
-instead reports `source: "inherited"` with `valueAvailable: false` and no value,
-and the shared secret is never fetched. `stacks.logs.tail` tails container logs
+returns native file metadata for a custom token; a stack that inherits Komodo Core's shared secret
+instead reports `source: "inherited"` with `valueAvailable: false` and no file,
+and the shared token is never fetched. `stacks.logs.tail` tails container logs
 (1-5000 lines, up to 50 named services) and `operations.logs.read` returns an
 operation's per-stage command logs. Per-file and per-record pages are bounded,
 and every content-bearing read labels its result `sensitive` and `untrusted`.
+
+Literal token values use [native file transfer](file-transfers.md). Ordinary
+configuration, Compose, environment, commands, and logs retain their content
+contracts; they are not treated as credentials by a speculative scanner.
 
 ### Collection completeness and continuation
 
@@ -207,7 +212,7 @@ deciding whether to deploy or submit another write.
 | `stacks.commands.write` | Replaces each supplied command object, leaving omitted pre/post commands unchanged. Empty command text clears that command. Stored commands run later with upstream deployment privileges. | `stacks.commands.read` |
 | `stacks.file.write` | Writes a complete file in repository or files-on-host mode; empty content leaves an empty file. Core enforces the applicable mode and path rules. | `operations.status` using the returned operation ID |
 | `stacks.webhook.update` | Only supplied flags change; their values affect subsequent webhook handling. | `stacks.webhook.status` |
-| `stacks.webhook.secret.write` | Replaces the custom value with a nonempty secret. Clearing it to restore inheritance is not supported. The shared Core secret remains unavailable through this server. | `stacks.webhook.status`, or `stacks.webhook.secret.read` for an authorized custom-value check |
+| `stacks.webhook.secret.write` | Sets a custom token from a completed native credential file, or explicitly restores inheritance. The shared Core token remains unavailable through the stack API. | `stacks.webhook.status`, or `stacks.webhook.secret.read` for an authorized custom-value check |
 
 Inline Compose is stored configuration text. Repository and host-file modes use
 files selected by Core instead. The configured, latest, and deployed Compose
@@ -252,8 +257,8 @@ Configuration writes use Komodo's typed partial-update semantics directly.
 paths, env-file path); `stacks.compose.write`, `stacks.environment.write`, and
 `stacks.commands.write` replace inline Compose, environment, and pre/post-deploy
 commands through partial `UpdateStack`; `stacks.webhook.update` sets the webhook
-enabled and force-deploy flags and `stacks.webhook.secret.write` sets the custom
-webhook secret through the same partial update; and `stacks.file.write` writes
+enabled and force-deploy flags and `stacks.webhook.secret.write` sets a custom token from native file transfer
+or explicitly selects inheritance through the same partial update; and `stacks.file.write` writes
 one file through `WriteStackFileContents`. They never perform a full-resource
 read-modify-write cycle, send only the fields they set, validate their complete
 bounded input before the upstream call, and return the target, applied field

@@ -302,6 +302,122 @@ async fn invalid_upload_grants_are_refused_before_body_read_and_shared_admission
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "The credential round trip verifies both tool boundaries in one authenticated scenario."
+)]
+async fn literal_tokens_use_authenticated_native_files_in_both_directions() {
+    let fixture = Fixture::new(Duration::from_secs(3)).await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({"type":"ListStacks"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id":"stack-1","name":"stack","type":"Stack","info":{"state":"running"}}
+        ])))
+        .expect(2)
+        .mount(&fixture.upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({"type":"GetStack"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"config":{
+            "webhook_secret":"fixture-read-token"
+        }})))
+        .expect(1)
+        .mount(&fixture.upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/write"))
+        .and(body_partial_json(json!({"type":"UpdateStack","params":{
+            "id":"stack-1","config":{"webhook_secret":"fixture-write-token"}
+        }})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&fixture.upstream)
+        .await;
+    let authorized = fixture
+        .json_response(fixture.file_request(
+            "files/authorizeUpload",
+            json!({"name":"token.txt","size":19}),
+        ))
+        .await;
+    let upload = &authorized["result"];
+    let upload_url = Url::parse(upload["upload"]["url"].as_str().unwrap()).unwrap();
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(upload_url.path())
+                .header(
+                    "authorization",
+                    upload["upload"]["headers"]["Authorization"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .body(Body::from("fixture-write-token"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let arguments = json!({"selector":"stack","secret":{"source":"custom","file":upload["file"]}});
+    let written = fixture
+        .json_response(fixture.request("stacks.webhook.secret.write", &arguments))
+        .await;
+    assert_eq!(
+        written["result"]["structuredContent"]["applied"],
+        json!(["webhookSecret"])
+    );
+    assert!(!written.to_string().contains("fixture-write-token"));
+    let replay = fixture
+        .json_response(fixture.request("stacks.webhook.secret.write", &arguments))
+        .await;
+    assert!(replay.get("error").is_some());
+    let read = fixture
+        .json_response(fixture.request("stacks.webhook.secret.read", &json!({"selector":"stack"})))
+        .await;
+    assert!(!read.to_string().contains("fixture-read-token"));
+    assert_eq!(read["result"]["structuredContent"]["valueAvailable"], true);
+    let authorized = fixture
+        .json_response(fixture.file_request(
+            "files/authorizeDownload",
+            json!({"uri":read["result"]["structuredContent"]["file"]["uri"]}),
+        ))
+        .await;
+    assert_eq!(authorized["result"]["sensitivity"], "secret");
+    let descriptor = &authorized["result"]["download"];
+    let download_url = Url::parse(descriptor["url"].as_str().unwrap()).unwrap();
+    let request = || {
+        Request::builder()
+            .uri(download_url.path())
+            .header(
+                "authorization",
+                descriptor["headers"]["Authorization"].as_str().unwrap(),
+            )
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = fixture.router.clone().oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(
+        to_bytes(response.into_body(), 1024).await.unwrap().as_ref(),
+        b"fixture-read-token"
+    );
+    assert_eq!(
+        fixture
+            .router
+            .clone()
+            .oneshot(request())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    fixture.cancellation.cancel();
+}
+
+#[tokio::test]
 async fn timeout_during_resolution_never_submits_an_action_configuration_or_file_write() {
     for (tool, arguments) in [
         ("stacks.stop", json!({"selector":"stack"})),

@@ -18,6 +18,10 @@ MCP (Model Context Protocol) lets a client discover and call these tools.
 **[Get started](#get-started)** · **[Documentation](docs/README.md)** ·
 **[Contribute](CONTRIBUTING.md)** · **[Get help](SUPPORT.md)**
 
+Literal webhook tokens use [native file transfer](docs/file-transfers.md) outside
+model context. Token tool calls carry file metadata, and the native runtime
+transports the credential bytes. Ordinary content keeps its read/write contract.
+
 ## Things to try
 
 **Find a stack and check its state.** Use `stacks.search` to find resources, then

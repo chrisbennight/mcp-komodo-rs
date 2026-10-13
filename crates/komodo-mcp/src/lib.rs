@@ -25,6 +25,7 @@ use rmcp::{
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
+use zeroize::Zeroizing;
 
 /// Stable gateway server name and identity-token audience.
 pub const MCP_SERVER_NAME: &str = "komodo";
@@ -329,7 +330,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     sensitive_read_spec(
         ToolKind::StacksWebhookSecretRead,
         "stacks.webhook.secret.read",
-        "Read one stack's custom webhook secret when the stack defines one, returned sensitive. An inherited secret reports source inherited with valueAvailable false and no value.",
+        "Read one stack's custom webhook token through native file transfer outside model context. An inherited token reports its source and valueAvailable false because the stack API does not return Core's shared token.",
     ),
     sensitive_read_spec(
         ToolKind::StacksLogsTail,
@@ -505,7 +506,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     config_write_spec(
         ToolKind::StacksWebhookSecretWrite,
         "stacks.webhook.secret.write",
-        "Replace the custom webhook secret with a nonempty value; clearing it to inherit Core's shared secret is not supported. Does not deploy. Komodo may retain the submitted secret in its own operation history. Requires komodo-admin; never retried. Returns the applied field name, not the value; reconcile with stacks.webhook.status for its source or the governed stacks.webhook.secret.read for a custom value.",
+        "Set a custom webhook token from a completed native credential file, or explicitly restore inheritance of Core's shared token. Does not deploy. Komodo may retain the submitted secret in its own operation history. Requires komodo-admin; never retried. Returns the applied field name, not the value; reconcile with stacks.webhook.status for its source or the governed stacks.webhook.secret.read for a custom value.",
         ToolBehavior::mutation()
             .destructive()
             .requires_review()
@@ -856,10 +857,22 @@ struct WebhookSecretWriteInput {
     /// Must be 1 to 128 UTF-8 bytes with no control characters.
     #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     selector: String,
-    /// New custom webhook secret value.
-    /// Must be 1 to 262144 UTF-8 bytes; empty values are rejected.
-    #[schemars(length(min = 1, max = MAX_WRITE_CONTENT_BYTES))]
-    secret: String,
+    /// Select inheritance explicitly or supply a completed native credential file.
+    secret: WebhookSecretInput,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+enum WebhookSecretInput {
+    /// Restore inheritance of Core's configured webhook token.
+    Inherited,
+    /// Set a custom token using native file transfer outside model context.
+    Custom {
+        #[schemars(extend("x-mcp-file" = serde_json::json!({
+            "maxSize": MAX_WRITE_CONTENT_BYTES, "transferModes": ["upload"]
+        })))]
+        file: files::FileValue,
+    },
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1223,8 +1236,8 @@ struct WebhookSecretView {
     source: String,
     /// Whether a value is available to return; false for inherited secrets.
     value_available: bool,
-    /// The custom webhook secret when available; null for inherited secrets.
-    value: Option<String>,
+    /// Native file metadata for the custom token; its contents never enter this response.
+    file: Option<files::FileValue>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -1356,6 +1369,7 @@ pub struct KomodoMcp {
     budget: Option<execution::ExecutionBudget>,
     rpc_cancellation: Option<tokio_util::sync::CancellationToken>,
     profile: ToolProfile,
+    credential_files: Option<(String, Arc<dyn files::CredentialFiles>)>,
 }
 
 impl KomodoMcp {
@@ -1368,6 +1382,7 @@ impl KomodoMcp {
             budget: None,
             rpc_cancellation: None,
             profile: ToolProfile::Full,
+            credential_files: None,
         }
     }
 
@@ -1382,6 +1397,7 @@ impl KomodoMcp {
             budget: None,
             rpc_cancellation: None,
             profile: ToolProfile::Status,
+            credential_files: None,
         }
     }
 
@@ -1396,6 +1412,17 @@ impl KomodoMcp {
     #[must_use]
     pub fn with_tool_profile(mut self, profile: ToolProfile) -> Self {
         self.profile = profile;
+        self
+    }
+
+    /// Bind credential transfers to a transport-verified principal.
+    #[must_use]
+    pub fn with_credential_files(
+        mut self,
+        owner: String,
+        files: Arc<dyn files::CredentialFiles>,
+    ) -> Self {
+        self.credential_files = Some((owner, files));
         self
     }
 
@@ -1686,7 +1713,10 @@ impl KomodoMcp {
             &input.selector,
         )?;
         let detail = self.read.stack_detail(&item.id).await.map_err(api_error)?;
-        structured(normalize_webhook_secret(detail.config.webhook_secret))
+        structured(normalize_webhook_secret(
+            detail.config.webhook_secret,
+            self.credential_files.as_ref(),
+        )?)
     }
 
     async fn stack_logs_tail(
@@ -2104,20 +2134,34 @@ impl KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<WebhookSecretWriteInput>(params)?;
         validate_selector(&input.selector)?;
-        // An empty secret is how Komodo records inheritance of Core's global
-        // secret, so writing one here would silently switch the stack's webhook
-        // authentication source rather than set a custom secret. Reject it; a
-        // caller wanting the inherited secret must not set a custom one.
-        if input.secret.is_empty() {
-            return Err(McpError::invalid_params(
-                "webhook secret must not be empty; clearing to the inherited secret is not supported",
-                None,
-            ));
-        }
-        validate_write_content(&input.secret)?;
+        self.admin()?;
+        let secret = match input.secret {
+            WebhookSecretInput::Inherited => Zeroizing::new(String::new()),
+            WebhookSecretInput::Custom { file } => {
+                let (owner, files) = self
+                    .credential_files
+                    .as_ref()
+                    .ok_or_else(file_transport_error)?;
+                let bytes = files.take(owner, &file.uri)?;
+                let text = std::str::from_utf8(&bytes).map_err(|_| {
+                    McpError::invalid_params(
+                        "webhook credential file must contain UTF-8 text",
+                        None,
+                    )
+                })?;
+                if text.is_empty() {
+                    return Err(McpError::invalid_params(
+                        "custom webhook token must not be empty; select inherited explicitly",
+                        None,
+                    ));
+                }
+                validate_write_content(text)?;
+                Zeroizing::new(text.to_owned())
+            }
+        };
         let target = self.resolve_stack_id(&input.selector).await?;
         let patch = StackConfigPatch {
-            webhook_secret: Some(input.secret),
+            webhook_secret: Some(secret.to_string()),
             ..StackConfigPatch::default()
         };
         self.admin()?
@@ -2818,22 +2862,39 @@ fn normalize_webhook_status(config: &StackConfigDetail) -> WebhookStatusView {
     }
 }
 
-// A stack with its own `webhook_secret` exposes that value; an empty secret
-// means the stack inherits Komodo Core's global secret, which this boundary
-// never fetches — it reports the source and `valueAvailable: false` only.
-fn normalize_webhook_secret(secret: String) -> WebhookSecretView {
+fn file_transport_error() -> McpError {
+    McpError::invalid_params(
+        "literal credential values require native file transfer",
+        None,
+    )
+}
+
+// An empty stack token selects inheritance. Core's global token is not returned
+// by the stack API, so its value is unavailable rather than withheld here.
+fn normalize_webhook_secret(
+    secret: String,
+    context: Option<&(String, Arc<dyn files::CredentialFiles>)>,
+) -> Result<WebhookSecretView, McpError> {
+    let secret = Zeroizing::new(secret);
     if secret.is_empty() {
-        WebhookSecretView {
+        Ok(WebhookSecretView {
             source: "inherited".into(),
             value_available: false,
-            value: None,
-        }
+            file: None,
+        })
     } else {
-        WebhookSecretView {
+        let (owner, files) = context.ok_or_else(file_transport_error)?;
+        let file = files.publish(
+            owner,
+            "webhook-token.txt",
+            "text/plain",
+            Zeroizing::new(secret.as_bytes().to_vec()),
+        )?;
+        Ok(WebhookSecretView {
             source: "custom".into(),
             value_available: true,
-            value: Some(secret),
-        }
+            file: Some(file),
+        })
     }
 }
 
@@ -3618,6 +3679,60 @@ mod tests {
         }
     }
 
+    struct TestCredentialFiles {
+        upload: std::sync::Mutex<Option<Vec<u8>>>,
+        published: std::sync::Mutex<Vec<Vec<u8>>>,
+    }
+
+    impl Default for TestCredentialFiles {
+        fn default() -> Self {
+            Self {
+                upload: std::sync::Mutex::new(Some(b"sentinel-file-token".to_vec())),
+                published: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl crate::files::CredentialFiles for TestCredentialFiles {
+        fn publish(
+            &self,
+            owner: &str,
+            name: &'static str,
+            mime_type: &'static str,
+            bytes: zeroize::Zeroizing<Vec<u8>>,
+        ) -> Result<crate::files::FileValue, rmcp::ErrorData> {
+            assert_eq!(owner, "fixture-owner");
+            let size = bytes.len() as u64;
+            self.published.lock().unwrap().push(bytes.to_vec());
+            Ok(crate::files::FileValue {
+                uri: "mcp-file://fixture/result".into(),
+                name: Some(name.into()),
+                mime_type: Some(mime_type.into()),
+                size: Some(size),
+                digest: None,
+            })
+        }
+
+        fn take(
+            &self,
+            owner: &str,
+            uri: &str,
+        ) -> Result<zeroize::Zeroizing<Vec<u8>>, rmcp::ErrorData> {
+            if owner != "fixture-owner" || uri != "mcp-file://fixture/webhook" {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "fixture file unavailable",
+                    None,
+                ));
+            }
+            self.upload
+                .lock()
+                .unwrap()
+                .take()
+                .map(zeroize::Zeroizing::new)
+                .ok_or_else(|| rmcp::ErrorData::invalid_params("fixture file unavailable", None))
+        }
+    }
+
     fn handler() -> KomodoMcp {
         KomodoMcp::new(
             Arc::new(FakeApi {
@@ -3628,6 +3743,10 @@ mod tests {
                 label: "admin",
                 ..FakeApi::default()
             }),
+        )
+        .with_credential_files(
+            "fixture-owner".into(),
+            Arc::new(TestCredentialFiles::default()),
         )
     }
 
@@ -4456,7 +4575,7 @@ mod tests {
             ),
             (
                 "stacks.webhook.secret.write",
-                json!({"selector":"stack", "secret":"value"}),
+                json!({"selector":"stack", "secret":{"source":"custom","file":{"uri":"mcp-file://fixture/webhook"}}}),
                 json!({"selector":"stack", "secret":""}),
             ),
         ] {
@@ -4644,7 +4763,7 @@ mod tests {
             ),
             (
                 "stacks.webhook.secret.write",
-                json!({ "selector": "stack-1", "secret": "hook-value" }),
+                json!({ "selector": "stack-1", "secret": {"source":"custom","file":{"uri":"mcp-file://fixture/webhook"}} }),
             ),
         ];
         cases.extend(
@@ -4976,7 +5095,7 @@ mod tests {
             ),
             (
                 "stacks.webhook.secret.write",
-                json!({"selector":"stack-1", "secret":"private-sentinel"}),
+                json!({"selector":"stack-1", "secret":{"source":"custom","file":{"uri":"mcp-file://fixture/webhook"}}}),
                 "stacks.webhook.secret.read",
             ),
         ] {
@@ -4984,7 +5103,11 @@ mod tests {
                 failure: Some(ApiError::Unavailable),
                 ..FakeApi::default()
             });
-            let handler = KomodoMcp::new(Arc::new(FakeApi::default()), admin.clone());
+            let handler = KomodoMcp::new(Arc::new(FakeApi::default()), admin.clone())
+                .with_credential_files(
+                    "fixture-owner".into(),
+                    Arc::new(TestCredentialFiles::default()),
+                );
             let params = CallToolRequestParams::new(name).with_arguments(arguments(&input));
             let error = handler.dispatch(&params).await.unwrap_err();
             let encoded = serde_json::to_value(&error).unwrap();
@@ -5611,7 +5734,9 @@ mod tests {
         .await;
         assert_eq!(custom["source"], "custom");
         assert_eq!(custom["valueAvailable"], true);
-        assert_eq!(custom["value"], "sentinel-hook");
+        assert_eq!(custom["file"]["uri"], "mcp-file://fixture/result");
+        assert!(!custom.to_string().contains("sentinel-hook"));
+        assert!(custom.get("value").is_none());
         assert_eq!(trust, json!({ "sensitive": true, "untrusted": true }));
 
         let (inherited, _) = dispatch_read(
@@ -5621,15 +5746,82 @@ mod tests {
         .await;
         assert_eq!(inherited["source"], "inherited");
         assert_eq!(inherited["valueAvailable"], false);
-        assert_eq!(inherited["value"], Value::Null);
+        assert_eq!(inherited["file"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn credential_contract_has_no_inline_fallback_and_validates_before_upstream() {
+        let request = CallToolRequestParams::new("stacks.webhook.secret.read")
+            .with_arguments(arguments(&json!({"selector":"stack-1"})));
+        let handler = KomodoMcp::new(Arc::new(FakeApi::default()), Arc::new(FakeApi::default()));
+        let error = handler.dispatch(&request).await.unwrap_err();
+        assert_eq!(
+            error.message,
+            "literal credential values require native file transfer"
+        );
+        assert!(
+            !serde_json::to_string(&error)
+                .unwrap()
+                .contains("sentinel-hook")
+        );
+        for bytes in [vec![], vec![0xff], vec![b'x'; 262_145]] {
+            let read = Arc::new(FakeApi::default());
+            let admin = Arc::new(FakeApi::default());
+            let files = TestCredentialFiles {
+                upload: std::sync::Mutex::new(Some(bytes)),
+                ..TestCredentialFiles::default()
+            };
+            let handler = KomodoMcp::new(read.clone(), admin.clone())
+                .with_credential_files("fixture-owner".into(), Arc::new(files));
+            let request = CallToolRequestParams::new("stacks.webhook.secret.write").with_arguments(
+                arguments(&json!({"selector":"stack-1","secret":{
+                    "source":"custom","file":{"uri":"mcp-file://fixture/webhook"}
+                }})),
+            );
+            assert!(handler.dispatch(&request).await.is_err());
+            assert_eq!(
+                read.read_attempts.load(std::sync::atomic::Ordering::SeqCst),
+                0
+            );
+            assert_eq!(admin.attempts.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn webhook_source_choices_forward_native_bytes_or_explicit_inheritance() {
+        for (secret, expected) in [
+            (
+                json!({"source":"custom","file":{"uri":"mcp-file://fixture/webhook"}}),
+                "sentinel-file-token",
+            ),
+            (json!({"source":"inherited"}), ""),
+        ] {
+            let admin = Arc::new(FakeApi::default());
+            let files = Arc::new(TestCredentialFiles::default());
+            let handler = KomodoMcp::new(Arc::new(FakeApi::default()), admin.clone())
+                .with_credential_files("fixture-owner".into(), files.clone());
+            let request = CallToolRequestParams::new("stacks.webhook.secret.write")
+                .with_arguments(arguments(&json!({"selector":"stack-1","secret":secret})));
+            let output = handler.dispatch(&request).await.unwrap();
+            assert_eq!(
+                admin.recorded.lock().unwrap()[0].webhook_secret.as_deref(),
+                Some(expected)
+            );
+            assert!(
+                !serde_json::to_string(&output)
+                    .unwrap()
+                    .contains("sentinel-file-token")
+            );
+            assert_eq!(files.upload.lock().unwrap().is_some(), expected.is_empty());
+        }
     }
 
     #[test]
     fn inherited_webhook_secret_never_carries_a_value() {
-        let inherited = normalize_webhook_secret(String::new());
+        let inherited = normalize_webhook_secret(String::new(), None).unwrap();
         assert_eq!(inherited.source, "inherited");
         assert!(!inherited.value_available);
-        assert_eq!(inherited.value, None);
+        assert_eq!(inherited.file, None);
     }
 
     #[tokio::test]
@@ -5860,7 +6052,7 @@ mod tests {
 
         let secret = dispatch_write(
             "stacks.webhook.secret.write",
-            json!({ "selector": "stack-1", "secret": "SENTINEL_HOOK" }),
+            json!({ "selector": "stack-1", "secret": {"source":"custom","file":{"uri":"mcp-file://fixture/webhook"}} }),
         )
         .await;
         assert_eq!(secret["target"], "stack-1");
@@ -5870,13 +6062,12 @@ mod tests {
             "the written secret must not be echoed"
         );
 
-        // An empty secret would switch the stack to the inherited global secret,
-        // which this "set custom secret" tool must not do silently.
+        // Inline values are outside this contract. Inheritance is a named intent.
         let empty = CallToolRequestParams::new("stacks.webhook.secret.write")
             .with_arguments(arguments(&json!({ "selector": "stack-1", "secret": "" })));
         assert!(
             handler().dispatch(&empty).await.is_err(),
-            "an empty webhook secret must be rejected"
+            "inline token input must be rejected"
         );
     }
 
