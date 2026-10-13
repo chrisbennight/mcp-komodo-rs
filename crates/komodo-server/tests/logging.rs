@@ -21,7 +21,7 @@ const TOKEN: &str = "synthetic-webhook-token-sentinel";
 
 fn history_toml() -> String {
     format!(
-        "[[stack]]\nname = \"ordinary-history-stack\"\n[stack.config]\nwebhook_secret = \"{TOKEN}\"\nenvironment = \"password=ordinary-text\"\nproject_name = \"10.20.0.1\"\n"
+        "[[stack]]\nname = \"ordinary-history-stack\"\n[stack.config]\nwebhook_secret = \"{TOKEN}\"\nenvironment = \"password=ordinary-text\"\nproject_name = \"10.20.0.1\"\n\n[[alerter]]\n[alerter.config.endpoint]\ntype = \"Custom\"\n[alerter.config.endpoint.params]\nurl = \"https://operator:{TOKEN}@alerts.example.test:not-a-port/public%2Froute\"\n"
     )
 }
 
@@ -273,7 +273,16 @@ async fn exercise_history_files(
     assert!(current["toml"].as_str().unwrap().contains("10.20.0.1"));
     assert_eq!(
         current["credentialFields"],
-        json!(["stack[0].config.webhook_secret"])
+        json!([
+            "stack[0].config.webhook_secret",
+            "alerter[0].config.endpoint.params.url"
+        ])
+    );
+    assert!(
+        current["toml"]
+            .as_str()
+            .unwrap()
+            .contains("alerts.example.test:not-a-port/public%2Froute")
     );
     let download = request(
         client,

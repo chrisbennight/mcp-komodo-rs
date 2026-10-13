@@ -4,7 +4,6 @@ use komodo_api::OperationItem;
 use schemars::JsonSchema;
 use serde::Serialize;
 use toml_edit::{DocumentMut, Item, TableLike};
-use url::Url;
 use zeroize::Zeroizing;
 
 use super::{KomodoMcp, McpError, OperationStatus, files::FileValue, normalize_operation};
@@ -207,75 +206,106 @@ fn project_alerter(config: &mut dyn TableLike, path: &str, fields: &mut Vec<Stri
     let Some(original) = item.as_str() else {
         return;
     };
-    let Ok(mut url) = Url::parse(original) else {
-        return;
-    };
-    let mut changed = false;
-    if url.password().is_some_and(|password| !password.is_empty()) {
-        let _ = url.set_password(Some("credential-in-original-file"));
-        changed = true;
+    if let Some(projected) = project_endpoint_url(original, kind.as_deref()) {
+        replace_value(item, projected);
+        fields.push(format!("{path}.endpoint.params.url"));
     }
-    let parts = url
-        .path_segments()
-        .map(|parts| parts.map(str::to_owned).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let credential_index = match kind.as_deref() {
+}
+
+const URL_CREDENTIAL: &str = "credential-in-original-file";
+
+fn project_endpoint_url(original: &str, kind: Option<&str>) -> Option<String> {
+    // URI components identify credentials independently of host or port validity.
+    // Preserve each other component verbatim, including its percent encoding.
+    let prefix_len = if let Some((scheme, _)) = original.split_once("://") {
+        if !scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            || !scheme
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"+-.".contains(&c))
+        {
+            return None;
+        }
+        scheme.len() + 3
+    } else if original.starts_with("//") {
+        2
+    } else {
+        return None;
+    };
+    let rest = &original[prefix_len..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let projected_authority = authority.rsplit_once('@').and_then(|(userinfo, host)| {
+        userinfo.split_once(':').and_then(|(username, password)| {
+            (!password.is_empty()).then(|| format!("{username}:{URL_CREDENTIAL}@{host}"))
+        })
+    });
+    let (resource, fragment) = tail.split_at(tail.find('#').unwrap_or(tail.len()));
+    let (path, query) = resource
+        .split_once('?')
+        .map_or((resource, None), |(p, q)| (p, Some(q)));
+    let projected_path = project_endpoint_path(path, kind);
+    let projected_query = query.and_then(|query| project_endpoint_query(query, kind));
+    if projected_authority.is_none() && projected_path.is_none() && projected_query.is_none() {
+        return None;
+    }
+    let mut result = format!(
+        "{}{}{}",
+        &original[..prefix_len],
+        projected_authority.as_deref().unwrap_or(authority),
+        projected_path.as_deref().unwrap_or(path)
+    );
+    if let Some(query) = query {
+        result.push('?');
+        result.push_str(projected_query.as_deref().unwrap_or(query));
+    }
+    result.push_str(fragment);
+    Some(result)
+}
+
+fn project_endpoint_path(path: &str, kind: Option<&str>) -> Option<String> {
+    let mut parts = path.split('/').collect::<Vec<_>>();
+    let credential_index = match kind {
         Some("Slack") => parts
             .iter()
-            .position(|part| part == "services")
+            .position(|part| *part == "services")
             .map(|index| index + 3),
         Some("Discord") => parts
             .iter()
-            .position(|part| part == "webhooks")
+            .position(|part| *part == "webhooks")
             .map(|index| index + 2),
         _ => None,
     };
-    if let Some(index) =
-        credential_index.filter(|index| parts.get(*index).is_some_and(|part| !part.is_empty()))
-    {
-        let path = parts
-            .iter()
-            .enumerate()
-            .map(|(i, part)| {
-                if i == index {
-                    "credential-in-original-file"
-                } else {
-                    part.as_str()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("/");
-        // set_path accepts already encoded segments without encoding '%' again.
-        url.set_path(&format!("/{path}"));
-        changed = true;
+    let index =
+        credential_index.filter(|index| parts.get(*index).is_some_and(|part| !part.is_empty()))?;
+    parts[index] = URL_CREDENTIAL;
+    Some(parts.join("/"))
+}
+
+fn project_endpoint_query(query: &str, kind: Option<&str>) -> Option<String> {
+    if kind != Some("Pushover") {
+        return None;
     }
-    if kind.as_deref() == Some("Pushover") {
-        let pairs = url
-            .query_pairs()
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect::<Vec<_>>();
-        if pairs
-            .iter()
-            .any(|(key, value)| matches!(key.as_str(), "token" | "user") && !value.is_empty())
-        {
-            let mut query = url.query_pairs_mut();
-            query.clear().extend_pairs(pairs.iter().map(|(key, value)| {
-                (
-                    key.as_str(),
-                    if matches!(key.as_str(), "token" | "user") && !value.is_empty() {
-                        "credential-in-original-file"
-                    } else {
-                        value.as_str()
-                    },
+    let mut changed = false;
+    let parts = query
+        .split('&')
+        .map(|pair| {
+            let credential = url::form_urlencoded::parse(pair.as_bytes())
+                .next()
+                .is_some_and(|(key, value)| {
+                    matches!(key.as_ref(), "token" | "user") && !value.is_empty()
+                });
+            if credential {
+                changed = true;
+                format!(
+                    "{}={URL_CREDENTIAL}",
+                    pair.split_once('=').expect("nonempty query value").0
                 )
-            }));
-            changed = true;
-        }
-    }
-    if changed {
-        replace_value(item, url.into());
-        fields.push(format!("{path}.endpoint.params.url"));
-    }
+            } else {
+                pair.to_owned()
+            }
+        })
+        .collect::<Vec<_>>();
+    changed.then(|| parts.join("&"))
 }
 
 #[cfg(test)]
@@ -424,6 +454,60 @@ mod tests {
                 assert!(result.toml.contains("extra%2Fpath"));
             }
             assert_eq!(*result.original.unwrap(), source.into_bytes());
+        }
+    }
+
+    #[test]
+    fn endpoint_credentials_do_not_depend_on_host_or_port_validation() {
+        for (kind, url, projected) in [
+            (
+                "Custom",
+                "https://operator:synthetic-password@alerts.example.test:not-a-port/public%2Froute?priority=%31#ordinary",
+                "https://operator:credential-in-original-file@alerts.example.test:not-a-port/public%2Froute?priority=%31#ordinary",
+            ),
+            (
+                "Slack",
+                "https://operator:synthetic-password@hooks.slack.com:bad/services/TPUBLIC%2FNAME/BPUBLIC%20NAME/synthetic-token?wait=true",
+                "https://operator:credential-in-original-file@hooks.slack.com:bad/services/TPUBLIC%2FNAME/BPUBLIC%20NAME/credential-in-original-file?wait=true",
+            ),
+            (
+                "Discord",
+                "https://discord.com:bad/api/webhooks/public%20id/synthetic-token/extra%2Fpath",
+                "https://discord.com:bad/api/webhooks/public%20id/credential-in-original-file/extra%2Fpath",
+            ),
+            (
+                "Pushover",
+                "https://operator:synthetic-password@api.pushover.net:bad/messages?tok%65n=synthetic-token&user=synthetic-user&priority=%31&empty=&token=#ordinary",
+                "https://operator:credential-in-original-file@api.pushover.net:bad/messages?tok%65n=credential-in-original-file&user=credential-in-original-file&priority=%31&empty=&token=#ordinary",
+            ),
+            (
+                "Custom",
+                "//operator:synthetic-password@[invalid-ipv6]/route",
+                "//operator:credential-in-original-file@[invalid-ipv6]/route",
+            ),
+        ] {
+            let source = format!(
+                "[[alerter]]\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
+            );
+            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let document = result.toml.parse::<DocumentMut>().unwrap();
+            assert_eq!(
+                document["alerter"][0]["config"]["endpoint"]["params"]["url"].as_str(),
+                Some(projected)
+            );
+            assert_eq!(*result.original.unwrap(), source.into_bytes());
+        }
+        for url in [
+            "https://operator@alerts.example.test:not-a-port/public%2Froute?token=ordinary-reference",
+            "not an endpoint: ordinary-text",
+            "https://operator:@[invalid-ipv6]/route",
+        ] {
+            let source = format!(
+                "[[alerter]]\n[alerter.config.endpoint]\ntype = 'Custom'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
+            );
+            let result = PreparedDocument::parse(source.clone()).unwrap();
+            assert_eq!(result.toml, source);
+            assert!(result.original.is_none());
         }
     }
 
