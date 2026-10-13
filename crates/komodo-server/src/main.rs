@@ -36,7 +36,7 @@ struct Args {
     /// Print the full standard MCP tools/list catalog without runtime credentials.
     #[arg(long, conflicts_with_all = ["healthcheck", "emit_gateway_manifest"])]
     emit_tools_json: bool,
-    /// Print source classification expectations for deployment validation, without credentials.
+    /// Print source MCP declarations for deployment validation, without credentials.
     #[arg(long, conflicts_with_all = ["stdio", "healthcheck", "emit_gateway_manifest", "emit_tools_json"])]
     emit_gateway_contract_json: bool,
     /// Process/export capabilities: status, read-only, operations, or full. Authorization remains separate.

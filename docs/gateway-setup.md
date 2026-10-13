@@ -10,8 +10,8 @@ quickstart. For a local client, use the [read-only quickstart](quickstart.md).
 
 Use the [tested Komodo contract](compatibility.md). Create separate service-user
 API credentials for reads and writes. Restrict each user to the resources it
-needs. The read identity needs access to status and any explicitly enabled
-sensitive read endpoints. It must have no execution or configuration-write
+needs. The read identity needs access to the reads selected by the operator.
+It must have no execution or configuration-write
 permissions. The write identity needs only the resource permissions for enabled
 deploy/restart/stop/build/pull or configuration intents; it must not be a global
 administrator merely to simplify setup. Resource permissions and API-key scopes
@@ -43,22 +43,20 @@ annotations:
 cargo run --locked -p komodo-server -- --emit-tools-json
 ```
 
-The gateway-specific connection and tool-risk scaffold is also available:
+The gateway-specific connection and tool-name scaffold is also available:
 
 ```sh
 cargo run --locked -p komodo-server -- --emit-gateway-manifest
 ```
 
 This scaffold is not ready to publish: its supported gateway requires an
-`approved_behavior_hash` for each tool, obtained from that gateway's live
+operator-selected risk and an `approved_behavior_hash` for each tool, obtained from that gateway's live
 manifest-change preview. Configure its URL and bearer secret reference for your
 deployment, then follow your gateway's admission procedure. Do not maintain a
-separate hand-edited copy of the Rust tool classifications.
+separate hand-edited copy of the source tool identities or behavior declarations.
 
-The scaffold uses the gateway's `low`, `medium`, and `high` risk vocabulary.
-The current scaffold assigns `high` to configuration, content, command, and
-secret writes. These are existing source-generated defaults, not required
-operator policy. Operators choose risk, disclosure, roles, and approvals for
+The scaffold contains no tool risk, sensitivity, role, or approval choices.
+Operators choose risk, disclosure, roles, and approvals for
 their deployment; a risk label alone is not authorization or approval policy.
 
 Before publishing, compare the complete generated tool-name set with the live
@@ -78,12 +76,14 @@ Neither export contains an authorization or approval policy. You must configure
 that policy in the gateway according to the operator's intended access,
 disclosure, roles, and approval rules. The library does not prescribe a local
 group name or a universal approval requirement. Standard MCP
-annotations and experimental metadata describe behavior; they grant no
+annotations describe behavior; they grant no
 permissions. The server verifies gateway identity but does not implement these
 per-user policy decisions itself. See [the architectural decisions](../DECISIONS.md)
-for the ownership boundary. Current export and validation behavior is described
-below; it does not make source-generated risk or sensitivity judgments an
-architectural requirement, and that behavior is part of the ongoing refactor.
+for the ownership boundary. Exports and validation preserve schemas, descriptions,
+and factual behavior without importing library-authored policy requirements.
+The contract export omits nonstandard action metadata. Legacy sensitivity and
+review claims remain in the MCP catalog pending the rest of the refactor; they
+are not imported policy floors.
 
 ## Verify the connection
 
@@ -102,7 +102,7 @@ configuration names and clock synchronization without logging tokens. A Komodo
 authentication/permission error after a valid MCP call concerns the upstream
 service user. A healthy process does not rule out either problem.
 
-## Validate deployed catalog coverage and classification
+## Validate deployed catalog coverage and declarations
 
 Export expectations from the exact source image being deployed, selecting its
 configured profile. This command needs no runtime credentials:
@@ -111,24 +111,24 @@ configured profile. This command needs no runtime credentials:
 komodo-mcp-rs --emit-gateway-contract-json --tool-profile full > source-contract.json
 ```
 
-Using the gateway's authorized discovery tools, collect every Komodo tool into
+Using authorized discovery, collect every deployed Komodo MCP declaration into
 an operator-local JSON projection with a `tools` array. Each entry must contain
-its fully qualified `name` and `governance` object with `risk`, `side_effects`,
-`pii`, `requires_approval`, and `requires_approval_known`. Fetch all pages and use
+its fully qualified `name`, `description`, `inputSchema`, `outputSchema`, and
+`annotations` with explicit standard behavior hints. Qualify source names with
+`komodo.` when discovery returns upstream names. A governance-only listing is
+insufficient: obtain the schemas and annotations as well. Fetch all pages and use
 a caller entitled to discover the complete configured profile; a restricted
 caller's smaller catalog is not evidence of deployment drift. Do not include
 connection configuration, credentials, or tool arguments in this projection.
 
 ```sh
-python3 scripts/check_gateway_catalog.py source-contract.json observed-catalog.json \
-  --approval-mode per_call
+python3 scripts/check_gateway_catalog.py source-contract.json observed-catalog.json
 ```
 
-Select the deployment's actual `approval_mode` explicitly. `per_call` expects
-the source review requirement to remain an imported approval floor;
-`policy_only` records the deliberate choice to govern approvals through policy.
-The validator refuses missing or extra tools, duplicate identities, unknown
-approval classification, and risk/effect/sensitivity drift. A zero exit status
+The validator refuses missing or extra tools, duplicate identities, malformed
+declarations, and schema, description, or standard behavior drift. Operator risk,
+disclosure, role, and approval choices are outside this comparison. Validate
+them through the gateway's policy checks. A zero exit status
 proves only agreement of this complete projection. It does not prove execution
 authorization, caller-specific exemptions, or Cedar approval overlays. Exercise
 those separately with controlled identities and non-production targets. The
