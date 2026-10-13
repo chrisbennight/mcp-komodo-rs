@@ -1264,6 +1264,7 @@ dependencies = [
  "base64",
  "clap",
  "ed25519-dalek",
+ "http-body",
  "jsonwebtoken",
  "komodo-api",
  "komodo-mcp",
