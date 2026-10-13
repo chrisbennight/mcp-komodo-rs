@@ -38,6 +38,26 @@ choice deploys the stack. Writes are never replayed; reconcile the source with
 `stacks.webhook.status` and custom values through authorized native download.
 Core may retain submitted tokens in its configuration and operation history.
 
+## Configuration history
+
+`operations.search`/`operations.status` return previous/current Core history.
+Ordinary TOML stays exact inline. `toml` replaces known credential values;
+`credentialFields` lists their paths; `originalFile` carries the exact original
+outside model context as `operation-before.toml` or `operation-after.toml`
+(fixed names).
+
+Typed credentials include server/URL-builder passkeys, webhook tokens, URL
+passwords, Slack/Discord webhook tokens, and Pushover application/user tokens.
+Empty inheritance, addresses, account/secret-name references, environment,
+Compose, and commands remain available. Custom/Ntfy text has no keyword or
+query-name scan.
+
+Both documents of every selected record are parsed before publishing files;
+only the selected page publishes originals. Invalid TOML returns a fixed error
+and numeric location without echoing bytes. Missing native support or capacity
+sets `originalFileUnavailable`: ordinary facts remain available and credentials
+stay file-only. Core may retain credentials in configuration and history.
+
 ## Native transport boundary
 
 `files/authorizeUpload` and `files/authorizeDownload` require the gateway bearer

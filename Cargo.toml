@@ -26,6 +26,7 @@ jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_r
 jsonschema = { version = "0.52", default-features = false }
 komodo-api = { version = "0.1.0", path = "crates/komodo-api" }
 komodo-mcp = { version = "0.1.0", path = "crates/komodo-mcp" }
+percent-encoding = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rmcp = { version = "=2.2.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
 schemars = "1"
@@ -36,6 +37,7 @@ subtle = "2.6.1"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+toml_edit = "0.25"
 tower = { version = "0.5", features = ["limit", "util"] }
 tower-http = { version = "0.7", features = ["timeout", "trace"] }
 tracing = "0.1"

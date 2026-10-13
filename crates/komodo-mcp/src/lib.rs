@@ -3,6 +3,7 @@
 mod errors;
 pub mod execution;
 pub mod files;
+mod history;
 mod networks;
 
 use std::{
@@ -326,12 +327,12 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::OperationsSearch,
         "operations.search",
-        "Search one bounded operation page with resource correlation, initiating user, version, and operation-specific data reported by Core.",
+        "Search one bounded operation page with resource correlation, initiating user, version, operation-specific data, and configuration history reported by Core. Ordinary history remains inline; explicit credential fields use native original files.",
     ),
     read_spec(
         ToolKind::OperationsStatus,
         "operations.status",
-        "Get one operation by stable id with normalized outcome, resource correlation, initiating user, version, commit, and operation-specific data reported by Core. Command logs have their own typed read.",
+        "Get one operation by stable id with outcome, correlation, initiating user, version, commit, operation-specific data, and configuration history. Ordinary history remains inline; explicit credential fields use native original files. Command logs have their own typed read.",
     ),
     read_spec(
         ToolKind::OperationsLogsRead,
@@ -887,6 +888,10 @@ struct RepoStatus {
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct OperationStatus {
+    /// Previous configuration text and any native original credential document.
+    previous_configuration: Option<history::HistoryDocument>,
+    /// Current configuration text and any native original credential document.
+    current_configuration: Option<history::HistoryDocument>,
     /// Stable Komodo operation id.
     id: String,
     /// Operation kind reported by Core, including future kinds.
@@ -1828,13 +1833,17 @@ impl KomodoMcp {
             .operations
             .into_iter()
             .filter(|item| operation_matches(item, query.as_deref()))
-            .map(normalize_operation)
             .collect::<Vec<_>>();
         let total = matches.len();
-        let items = matches
+        let prepared = matches
             .into_iter()
             .skip(usize::from(input.offset))
             .take(input.limit)
+            .map(history::PreparedOperation::parse)
+            .collect::<Result<Vec<_>, _>>()?;
+        let items = prepared
+            .into_iter()
+            .map(|operation| operation.publish(self))
             .collect::<Vec<_>>();
         let consumed = usize::from(input.offset) + items.len();
         let next_offset = (consumed < total)
@@ -1865,7 +1874,7 @@ impl KomodoMcp {
             .update(&input.operation_id)
             .await
             .map_err(|error| self.operation_lookup_error(error))?;
-        structured(normalize_operation(item))
+        structured(self.normalize_history_operation(item)?)
     }
 
     async fn operation_logs_read(
@@ -2963,6 +2972,8 @@ fn normalize_repo(item: ResourceListItem<RepoInfo>) -> RepoStatus {
 fn normalize_operation(item: OperationItem) -> OperationStatus {
     let (outcome, success) = operation_outcome(&item.status, item.success);
     OperationStatus {
+        previous_configuration: None,
+        current_configuration: None,
         id: item.id,
         operation: item.operation,
         start_ts: item.start_ts,
@@ -3496,6 +3507,31 @@ mod tests {
                         next_page: Some(3),
                     });
                 }
+                if page == 3 {
+                    return Ok(OperationPage {
+                        operations: vec![
+                            OperationItem {id:"ordinary-history".into(), operation:"UpdateStack".into(),
+                                current_toml:Some("[[stack]]\nname = 'ordinary'\n[stack.config]\nenvironment = 'password=ordinary-text'\n".into()),
+                                ..Default::default()},
+                            history_operation()
+                        ], next_page:None
+                    });
+                }
+                if page == 4 {
+                    return Ok(OperationPage {
+                        operations: vec![
+                            history_operation(),
+                            OperationItem {
+                                current_toml: Some(
+                                    "[[stack]]\n[stack.config]\nwebhook_secret = 'unterminated"
+                                        .into(),
+                                ),
+                                ..Default::default()
+                            },
+                        ],
+                        next_page: None,
+                    });
+                }
                 Ok(OperationPage {
                     operations: vec![OperationItem {
                         id: if page > 100 {
@@ -3532,6 +3568,8 @@ mod tests {
                         status: "Complete".into(),
                         ..Default::default()
                     })
+                } else if operation_id == "history-document" {
+                    Ok(history_operation())
                 } else {
                     Err(ApiError::NotFound)
                 }
@@ -3731,6 +3769,16 @@ mod tests {
     struct TestCredentialFiles {
         upload: std::sync::Mutex<Option<Vec<u8>>>,
         published: std::sync::Mutex<Vec<Vec<u8>>>,
+    }
+
+    fn history_operation() -> OperationItem {
+        OperationItem {
+            id:"history-document".into(), operation:"UpdateStack".into(), start_ts:14,
+            status:"Complete".into(), success:true,
+            prev_toml:Some("[[stack]]\nname = 'api'\n[stack.config]\nproject_name = 'before'\n".into()),
+            current_toml:Some("[[stack]]\nname = 'api'\n[stack.config]\nproject_name = 'after'\nwebhook_secret = 'synthetic-history-token'\nenvironment = 'password=ordinary-text'\n".into()),
+            ..Default::default()
+        }
     }
 
     impl Default for TestCredentialFiles {
@@ -5806,6 +5854,115 @@ mod tests {
             assert_eq!(output[page]["returned"], output[page]["totalObserved"]);
             assert_eq!(output[page]["nextOffset"], Value::Null);
         }
+    }
+
+    #[tokio::test]
+    async fn operation_history_preserves_ordinary_facts_and_native_originals_with_read_credentials()
+    {
+        let files = Arc::new(TestCredentialFiles::default());
+        let handler = KomodoMcp::read_only(Arc::new(FakeApi::default()))
+            .with_credential_files("fixture-owner".into(), files.clone());
+        let output = handler
+            .dispatch(
+                &CallToolRequestParams::new("operations.status")
+                    .with_arguments(arguments(&json!({"operation_id":"history-document"}))),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(output["id"], "history-document");
+        assert_eq!(output["outcome"], "succeeded");
+        assert_eq!(
+            output["previousConfiguration"]["toml"],
+            history_operation().prev_toml.unwrap()
+        );
+        assert!(output["previousConfiguration"]["originalFile"].is_null());
+        let current = &output["currentConfiguration"];
+        let projection = current["toml"].as_str().unwrap();
+        assert!(projection.contains("project_name = 'after'"));
+        assert!(projection.contains("password=ordinary-text"));
+        assert!(!output.to_string().contains("synthetic-history-token"));
+        assert_eq!(
+            current["credentialFields"],
+            json!(["stack[0].config.webhook_secret"])
+        );
+        assert_eq!(current["originalFile"]["name"], "operation-after.toml");
+        assert_eq!(
+            files.published.lock().unwrap()[0],
+            history_operation().current_toml.unwrap().into_bytes()
+        );
+
+        let local = KomodoMcp::read_only(Arc::new(FakeApi::default()))
+            .dispatch(
+                &CallToolRequestParams::new("operations.status")
+                    .with_arguments(arguments(&json!({"operation_id":"history-document"}))),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(local["outcome"], "succeeded");
+        assert_eq!(local["currentConfiguration"]["toml"], current["toml"]);
+        assert_eq!(
+            local["currentConfiguration"]["originalFileUnavailable"],
+            "native file transfer required"
+        );
+        assert!(!local.to_string().contains("synthetic-history-token"));
+    }
+
+    #[tokio::test]
+    async fn operation_history_search_only_publishes_originals_in_the_requested_page() {
+        let files = Arc::new(TestCredentialFiles::default());
+        let handler = KomodoMcp::read_only(Arc::new(FakeApi::default()))
+            .with_credential_files("fixture-owner".into(), files.clone());
+        let first = handler
+            .dispatch(
+                &CallToolRequestParams::new("operations.search")
+                    .with_arguments(arguments(&json!({"page":3,"limit":1}))),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(first["items"][0]["id"], "ordinary-history");
+        assert_eq!(first["nextOffset"], 1);
+        assert!(
+            first["items"][0]["currentConfiguration"]["toml"]
+                .as_str()
+                .unwrap()
+                .contains("password=ordinary-text")
+        );
+        assert!(files.published.lock().unwrap().is_empty());
+        let last = handler
+            .dispatch(
+                &CallToolRequestParams::new("operations.search")
+                    .with_arguments(arguments(&json!({"page":3,"limit":1,"offset":1}))),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(last["items"][0]["id"], "history-document");
+        assert!(last["nextOffset"].is_null());
+        assert_eq!(files.published.lock().unwrap().len(), 1);
+        assert!(!last.to_string().contains("synthetic-history-token"));
+    }
+
+    #[tokio::test]
+    async fn invalid_selected_history_batch_publishes_no_unreachable_files() {
+        let files = Arc::new(TestCredentialFiles::default());
+        let handler = KomodoMcp::read_only(Arc::new(FakeApi::default()))
+            .with_credential_files("fixture-owner".into(), files.clone());
+        let error = handler
+            .dispatch(
+                &CallToolRequestParams::new("operations.search")
+                    .with_arguments(arguments(&json!({"page":4,"limit":2}))),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, "Core history document is not valid TOML");
+        assert!(files.published.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

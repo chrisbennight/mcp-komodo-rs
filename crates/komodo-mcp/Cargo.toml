@@ -8,12 +8,15 @@ repository.workspace = true
 
 [dependencies]
 komodo-api.workspace = true
+percent-encoding.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+toml_edit.workspace = true
+url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
