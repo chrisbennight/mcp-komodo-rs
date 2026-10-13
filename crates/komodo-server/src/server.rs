@@ -193,6 +193,21 @@ mod tests {
             Box::pin(async { Err(ApiError::Unavailable) })
         }
 
+        fn networks<'a>(
+            &'a self,
+            _server: &'a str,
+        ) -> ApiFuture<'a, Vec<komodo_api::networks::NetworkListItem>> {
+            Box::pin(async { Err(ApiError::Unavailable) })
+        }
+
+        fn network<'a>(
+            &'a self,
+            _server: &'a str,
+            _network: &'a str,
+        ) -> ApiFuture<'a, komodo_api::networks::Network> {
+            Box::pin(async { Err(ApiError::Unavailable) })
+        }
+
         fn stacks(&self) -> ApiFuture<'_, Vec<ResourceListItem<StackInfo>>> {
             Box::pin(async { Err(ApiError::Unavailable) })
         }

@@ -16,6 +16,7 @@ Read-only tools:
 
 - `system.status`;
 - `servers.search` and `servers.status`;
+- `servers.networks.search` and `servers.networks.read`;
 - `stacks.search`, `stacks.status`, and `stacks.diagnostics`;
 - `deployments.search` and `deployments.status`;
 - `builds.search` and `builds.status`;
@@ -92,6 +93,25 @@ names. Server facts include network addresses, public keys, region, alerts, and
 available statistics. Stack, deployment, build, and repository facts include
 placement, image, source, branch, and commit provenance. Fields introduced in
 newer Core releases are optional when older versions do not report them.
+
+`servers.networks.search` selects one server by name or id and returns its typed
+Docker network inventory. An optional `query` matches network names or ids,
+ignoring ASCII case and surrounding query whitespace. Results are sorted by
+name and id. A `window` defaults to offset zero and 250 records; follow
+`itemsPage.nextOffset` to reach the remaining filtered inventory. Every request
+fetches a fresh bounded inventory, so continuation is not a snapshot guarantee.
+List facts include driver, scope, IPv6 enablement, IPAM subnet and gateway, and
+attachment flags when Core reports them.
+
+`servers.networks.read` takes a server selector and a network name or id. It
+returns the server identity and a typed network record, including IPAM address
+ranges and auxiliary addresses, driver options, labels, and attached endpoint
+identifiers and MAC, IPv4, and IPv6 addresses. Network record fields use snake
+case; missing facts remain null rather than becoming empty or false. Both tools
+use read credentials, preserve ordinary addressing facts without sensitivity
+filtering, and apply the shared upstream response bound. Input validation
+finishes before resource resolution. Network data remains untrusted and never
+becomes a local command.
 
 Search inputs accept an optional 128-byte ASCII-case-insensitive substring, a bounded
 offset, and a positive limit. Results are sorted by normalized name and
@@ -300,7 +320,7 @@ they do not impose operator policy or replace the gateway's reviewed admission.
 
 ## Current implementation coverage
 
-There are no tools for Docker or Swarm inspection, container or server
+Beyond the typed network reads, there are no tools for container or Swarm inspection, container or server
 terminals, unrestricted shell execution, arbitrary actions or procedures,
 providers, credential stores, permissions, onboarding keys, ResourceSync
 apply, raw API forwarding, or generic resource create/update/delete. This is
