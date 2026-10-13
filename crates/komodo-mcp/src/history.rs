@@ -216,21 +216,42 @@ fn project_alerter(config: &mut dyn TableLike, path: &str, fields: &mut Vec<Stri
 const URL_CREDENTIAL: &str = "credential-in-original-file";
 
 fn project_endpoint_url(original: &str, kind: Option<&str>) -> Option<String> {
-    project_uri_components(original, kind).or_else(|| {
-        // WHATWG URL parsing also accepts surrounding whitespace and special-scheme
-        // slash variants. Inspect those recognized credentials without changing
-        // an ordinary endpoint that has no credential component.
-        let normalized = Url::parse(original).ok()?;
-        project_uri_components(normalized.as_str(), kind)
-    })
+    // Apply the URL parser's standard input handling before either interpretation.
+    // An endpoint without recognized credentials still keeps its exact original text.
+    let input = original
+        .trim_matches(|c: char| c <= ' ')
+        .replace(['\t', '\n', '\r'], "");
+    let relative = input.starts_with("//");
+    let normalized = if relative {
+        Url::parse("https://endpoint.invalid/")
+            .expect("fixed parsing base")
+            .join(&input)
+    } else {
+        Url::parse(&input)
+    };
+    match normalized {
+        Ok(url) => {
+            let projected = project_uri_components(url.as_str(), kind)?;
+            Some(if relative {
+                projected
+                    .strip_prefix("https:")
+                    .expect("fixed relative scheme")
+                    .to_owned()
+            } else {
+                projected
+            })
+        }
+        Err(_) => project_uri_components(&input, kind),
+    }
 }
 
 fn project_uri_components(original: &str, kind: Option<&str>) -> Option<String> {
     // URI components identify credentials independently of host or port validity.
     // Preserve each other component verbatim, including its percent encoding.
-    let prefix_len = if original.starts_with("//") {
-        2
-    } else if let Some((scheme, _)) = original.split_once("://") {
+    let (prefix, rest, special) = if original.starts_with("//") {
+        ("//".into(), original.trim_start_matches(['/', '\\']), true)
+    } else {
+        let (scheme, rest) = original.split_once(':')?;
         if !scheme.starts_with(|c: char| c.is_ascii_alphabetic())
             || !scheme
                 .bytes()
@@ -238,12 +259,20 @@ fn project_uri_components(original: &str, kind: Option<&str>) -> Option<String> 
         {
             return None;
         }
-        scheme.len() + 3
-    } else {
-        return None;
+        let special = matches!(
+            scheme.to_ascii_lowercase().as_str(),
+            "ftp" | "file" | "http" | "https" | "ws" | "wss"
+        );
+        let rest = if special {
+            rest.trim_start_matches(['/', '\\'])
+        } else {
+            rest.strip_prefix("//")?
+        };
+        (format!("{scheme}://"), rest, special)
     };
-    let rest = &original[prefix_len..];
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority_end = rest
+        .find(|c| matches!(c, '/' | '?' | '#') || (special && c == '\\'))
+        .unwrap_or(rest.len());
     let (authority, tail) = rest.split_at(authority_end);
     let projected_authority = authority.rsplit_once('@').and_then(|(userinfo, host)| {
         userinfo.split_once(':').and_then(|(username, password)| {
@@ -261,7 +290,7 @@ fn project_uri_components(original: &str, kind: Option<&str>) -> Option<String> 
     }
     let mut result = format!(
         "{}{}{}",
-        &original[..prefix_len],
+        prefix,
         projected_authority.as_deref().unwrap_or(authority),
         projected_path.as_deref().unwrap_or(path)
     );
@@ -329,6 +358,13 @@ fn project_endpoint_query(query: &str, kind: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn alerter_document(kind: &str, url: &str) -> String {
+        format!(
+            "[[alerter]]\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = {}\n",
+            serde_json::to_string(url).unwrap()
+        )
+    }
 
     #[test]
     fn ordinary_documents_and_empty_inheritance_remain_exact() {
@@ -418,9 +454,7 @@ mod tests {
                 "operator:",
             ),
         ] {
-            let source = format!(
-                "[[alerter]]\nname = 'notifications'\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
-            );
+            let source = alerter_document(kind, url);
             let result = PreparedDocument::parse(source.clone()).unwrap();
             assert!(!result.toml.contains("synthetic-url-token"));
             assert!(!result.toml.contains("synthetic-user-key"));
@@ -438,8 +472,9 @@ mod tests {
             assert_eq!(*result.original.unwrap(), source.into_bytes());
         }
         for kind in ["Custom", "Ntfy"] {
-            let source = format!(
-                "[[alerter]]\nname = 'ordinary'\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = 'https://alerts.example.test/secret-name?token=ordinary-reference'\n"
+            let source = alerter_document(
+                kind,
+                "https://alerts.example.test/secret-name?token=ordinary-reference",
             );
             let result = PreparedDocument::parse(source.clone()).unwrap();
             assert_eq!(result.toml, source);
@@ -461,9 +496,7 @@ mod tests {
                 "webhooks/public%20identifier",
             ),
         ] {
-            let source = format!(
-                "[[alerter]]\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
-            );
+            let source = alerter_document(kind, url);
             let result = PreparedDocument::parse(source.clone()).unwrap();
             assert!(result.toml.contains(ordinary));
             assert!(!result.toml.contains("%25"));
@@ -477,46 +510,42 @@ mod tests {
 
     #[test]
     fn endpoint_credentials_do_not_depend_on_host_or_port_validation() {
-        for (kind, url, projected) in [
+        for (kind, url) in [
             (
                 "Custom",
                 "https://operator:synthetic-password@alerts.example.test:not-a-port/public%2Froute?priority=%31#ordinary",
-                "https://operator:credential-in-original-file@alerts.example.test:not-a-port/public%2Froute?priority=%31#ordinary",
             ),
             (
                 "Slack",
                 "https://operator:synthetic-password@hooks.slack.com:bad/services/TPUBLIC%2FNAME/BPUBLIC%20NAME/synthetic-token?wait=true",
-                "https://operator:credential-in-original-file@hooks.slack.com:bad/services/TPUBLIC%2FNAME/BPUBLIC%20NAME/credential-in-original-file?wait=true",
             ),
             (
                 "Discord",
                 "https://discord.com:bad/api/webhooks/public%20id/synthetic-token/extra%2Fpath",
-                "https://discord.com:bad/api/webhooks/public%20id/credential-in-original-file/extra%2Fpath",
             ),
             (
                 "Pushover",
                 "https://operator:synthetic-password@api.pushover.net:bad/messages?tok%65n=synthetic-token&user=synthetic-user&priority=%31&empty=&token=#ordinary",
-                "https://operator:credential-in-original-file@api.pushover.net:bad/messages?tok%65n=credential-in-original-file&user=credential-in-original-file&priority=%31&empty=&token=#ordinary",
             ),
             (
                 "Custom",
                 "//operator:synthetic-password@[invalid-ipv6]/route",
-                "//operator:credential-in-original-file@[invalid-ipv6]/route",
             ),
             (
                 "Custom",
                 "//operator:synthetic-password@alerts.example.test:bad/public%2Froute?next=https://docs.example.test#source=https://ordinary.example.test",
-                "//operator:credential-in-original-file@alerts.example.test:bad/public%2Froute?next=https://docs.example.test#source=https://ordinary.example.test",
             ),
         ] {
-            let source = format!(
-                "[[alerter]]\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
-            );
+            let source = alerter_document(kind, url);
+            let projected = url
+                .replace("synthetic-password", "credential-in-original-file")
+                .replace("synthetic-token", "credential-in-original-file")
+                .replace("synthetic-user", "credential-in-original-file");
             let result = PreparedDocument::parse(source.clone()).unwrap();
             let document = result.toml.parse::<DocumentMut>().unwrap();
             assert_eq!(
                 document["alerter"][0]["config"]["endpoint"]["params"]["url"].as_str(),
-                Some(projected)
+                Some(projected.as_str())
             );
             assert_eq!(*result.original.unwrap(), source.into_bytes());
         }
@@ -525,9 +554,7 @@ mod tests {
             "not an endpoint: ordinary-text",
             "https://operator:@[invalid-ipv6]/route",
         ] {
-            let source = format!(
-                "[[alerter]]\n[alerter.config.endpoint]\ntype = 'Custom'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
-            );
+            let source = alerter_document("Custom", url);
             let result = PreparedDocument::parse(source.clone()).unwrap();
             assert_eq!(result.toml, source);
             assert!(result.original.is_none());
@@ -558,9 +585,7 @@ mod tests {
                 "/api/webhooks/public-id/",
             ),
         ] {
-            let source = format!(
-                "[[alerter]]\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
-            );
+            let source = alerter_document(kind, url);
             let result = PreparedDocument::parse(source.clone()).unwrap();
             assert!(!result.toml.contains("synthetic-token"));
             assert!(!result.toml.contains("synthetic-password"));
@@ -580,10 +605,7 @@ mod tests {
                 Url::parse(url).unwrap().password(),
                 Some("synthetic-password")
             );
-            let source = format!(
-                "[[alerter]]\n[alerter.config.endpoint]\ntype = 'Custom'\n[alerter.config.endpoint.params]\nurl = {}\n",
-                serde_json::to_string(url).unwrap()
-            );
+            let source = alerter_document("Custom", url);
             let result = PreparedDocument::parse(source.clone()).unwrap();
             assert!(!result.toml.contains("synthetic-password"));
             assert!(
@@ -593,10 +615,34 @@ mod tests {
             );
             assert_eq!(*result.original.unwrap(), source.into_bytes());
         }
-        let source = "[[alerter]]\n[alerter.config.endpoint]\ntype = 'Custom'\n[alerter.config.endpoint.params]\nurl = '  https:/alerts.example.test/public%2Froute?token=ordinary-reference  '\n";
-        let result = PreparedDocument::parse(source.into()).unwrap();
+        let source = alerter_document(
+            "Custom",
+            "  https:/alerts.example.test/public%2Froute?token=ordinary-reference  ",
+        );
+        let result = PreparedDocument::parse(source.clone()).unwrap();
         assert_eq!(result.toml, source);
         assert!(result.original.is_none());
+    }
+
+    #[test]
+    fn mixed_password_and_special_scheme_path_credentials_are_both_projected() {
+        for prefix in ["https://", "https:/", "https:", "https:\\", "//", "///"] {
+            for port in ["", ":bad"] {
+                let url = format!(
+                    " \t{prefix}operator:synthetic-password@hooks.slack.com{port}\\services\\TPUBLIC\\BPUBLIC\\synthetic-token?wait=true \r"
+                );
+                let source = alerter_document("Slack", &url);
+                let result = PreparedDocument::parse(source.clone()).unwrap();
+                assert!(
+                    !result.toml.contains("synthetic-password"),
+                    "{prefix}{port}"
+                );
+                assert!(!result.toml.contains("synthetic-token"), "{prefix}{port}");
+                assert!(result.toml.contains("TPUBLIC/BPUBLIC/"));
+                assert!(result.toml.contains("wait=true"));
+                assert_eq!(*result.original.unwrap(), source.into_bytes());
+            }
+        }
     }
 
     #[test]
