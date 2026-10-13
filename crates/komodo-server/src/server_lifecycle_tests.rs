@@ -106,7 +106,7 @@ impl Fixture {
 
     fn file_request(&self, method: &str, mut params: Value) -> Request<Body> {
         params["_meta"] = json!({"io.modelcontextprotocol/clientCapabilities":{
-            "files":{"upload":true,"download":true,"transports":["https"]}
+            "files":{"upload":true,"download":true,"transports":["https","http"]}
         }});
         self.request("unused", &json!({})).map(|_| {
             Body::from(json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}).to_string())
@@ -263,6 +263,41 @@ async fn native_file_authorization_keeps_gateway_authentication_and_subject_owne
         b"fixture-token"
     );
     assert!(fixture.requests().await.is_empty());
+    fixture.cancellation.cancel();
+}
+
+#[tokio::test]
+async fn invalid_upload_grants_are_refused_before_body_read_and_shared_admission() {
+    struct PendingBody;
+    impl axum::body::HttpBody for PendingBody {
+        type Data = axum::body::Bytes;
+        type Error = std::convert::Infallible;
+        fn poll_frame(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+            std::task::Poll::Pending
+        }
+    }
+    let fixture = Fixture::new(Duration::from_secs(1)).await;
+    let request = Request::builder()
+        .method("PUT")
+        .uri(format!("/file-transfers/{}", "x".repeat(43)))
+        .header("authorization", format!("Bearer {}", "x".repeat(43)))
+        .body(Body::new(PendingBody))
+        .unwrap();
+    let response = tokio::time::timeout(
+        Duration::from_millis(100),
+        fixture.router.clone().oneshot(request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let authorized = fixture
+        .json_response(fixture.file_request("files/authorizeUpload", json!({})))
+        .await;
+    assert!(authorized["result"]["file"].is_object());
     fixture.cancellation.cancel();
 }
 

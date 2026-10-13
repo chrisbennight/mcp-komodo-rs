@@ -2,23 +2,28 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
+    pin::Pin,
     sync::{Arc, Mutex},
+    task::{Context, Poll},
     time::{Duration, Instant},
 };
 
 use axum::{
-    body::{Body, to_bytes},
+    body::{Body, Bytes, HttpBody, to_bytes},
     extract::{Path, Request, State},
     http::{StatusCode, header},
+    middleware::Next,
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use http_body::{Frame, SizeHint};
 use komodo_mcp::files::{CredentialFiles, FileValue};
 use rmcp::{ErrorData, model::Meta};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 use zeroize::Zeroizing;
 
@@ -72,7 +77,7 @@ struct Grant {
 struct Entry {
     owner: String,
     file: FileValue,
-    bytes: Option<Zeroizing<Vec<u8>>>,
+    bytes: Option<StoredBytes>,
     expected_digest: Option<[u8; 32]>,
     expected_size: Option<u64>,
     expires: Instant,
@@ -80,9 +85,60 @@ struct Entry {
     uploaded: bool,
 }
 
-#[derive(Default)]
 pub(crate) struct TransferFiles {
     entries: Mutex<HashMap<String, Entry>>,
+    capacity: Arc<Semaphore>,
+}
+
+impl Default for TransferFiles {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            capacity: Arc::new(Semaphore::new(MAX_STORED_BYTES)),
+        }
+    }
+}
+
+struct StoredBytes {
+    bytes: Zeroizing<Vec<u8>>,
+    _capacity: OwnedSemaphorePermit,
+}
+
+impl StoredBytes {
+    fn as_slice(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+struct DownloadBody {
+    stored: StoredBytes,
+    offset: usize,
+}
+
+impl HttpBody for DownloadBody {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+        let remaining = &self.stored.as_slice()[self.offset..];
+        if remaining.is_empty() {
+            return Poll::Ready(None);
+        }
+        let count = remaining.len().min(16 * 1024);
+        let chunk = Bytes::copy_from_slice(&remaining[..count]);
+        self.offset += count;
+        Poll::Ready(Some(Ok(Frame::data(chunk))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.offset == self.stored.bytes.len()
+    }
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact((self.stored.bytes.len() - self.offset) as u64)
+    }
 }
 
 fn random_id() -> Result<String, ErrorData> {
@@ -101,13 +157,8 @@ fn prune(entries: &mut HashMap<String, Entry>) {
     entries.retain(|_, entry| entry.expires > now);
 }
 
-fn admit(entries: &HashMap<String, Entry>, size: usize) -> Result<(), ErrorData> {
-    let stored: usize = entries
-        .values()
-        .filter_map(|entry| entry.bytes.as_ref())
-        .map(|bytes| bytes.len())
-        .sum();
-    if entries.len() >= MAX_ENTRIES || stored.saturating_add(size) > MAX_STORED_BYTES {
+fn admit(entries: &HashMap<String, Entry>) -> Result<(), ErrorData> {
+    if entries.len() >= MAX_ENTRIES {
         return Err(ErrorData::internal_error(
             "credential transfer capacity unavailable",
             None,
@@ -153,11 +204,37 @@ pub(crate) fn supports_http(meta: &Meta, direction: &str) -> bool {
         v.get(direction).and_then(Value::as_bool) == Some(true)
             && v.get("transports")
                 .and_then(Value::as_array)
-                .is_some_and(|values| values.iter().any(|v| v == "https" || v == "http"))
+                .is_some_and(|values| values.iter().any(|v| v == "http"))
     })
 }
 
 impl TransferFiles {
+    fn store_bytes(&self, bytes: Zeroizing<Vec<u8>>) -> Result<StoredBytes, ErrorData> {
+        let amount = u32::try_from(bytes.len()).expect("bounded credential transfer size");
+        let capacity = self
+            .capacity
+            .clone()
+            .try_acquire_many_owned(amount)
+            .map_err(|_| {
+                ErrorData::internal_error("credential transfer capacity unavailable", None)
+            })?;
+        Ok(StoredBytes {
+            bytes,
+            _capacity: capacity,
+        })
+    }
+
+    fn admits_grant(&self, id: &str, token: &str, direction: Direction) -> bool {
+        let mut entries = self
+            .entries
+            .lock()
+            .expect("credential transfer registry poisoned");
+        prune(&mut entries);
+        entries.get(id).is_some_and(|entry| {
+            valid_grant(entry, token, direction)
+                && entry.bytes.is_some() == (direction == Direction::Download)
+        })
+    }
     pub(crate) async fn expire_until_shutdown(
         &self,
         cancellation: tokio_util::sync::CancellationToken,
@@ -229,7 +306,7 @@ impl TransferFiles {
             .lock()
             .expect("credential transfer registry poisoned");
         prune(&mut entries);
-        admit(&entries, 0)?;
+        admit(&entries)?;
         if entries.contains_key(&id) {
             return Err(ErrorData::internal_error("file identifier collision", None));
         }
@@ -277,16 +354,11 @@ impl TransferFiles {
             .lock()
             .expect("credential transfer registry poisoned");
         prune(&mut entries);
-        let stored: usize = entries
-            .values()
-            .filter_map(|entry| entry.bytes.as_ref())
-            .map(|v| v.len())
-            .sum();
         let entry = entries
             .get_mut(id)
             .filter(|entry| entry.bytes.is_none() && valid_grant(entry, token, Direction::Upload))
             .ok_or_else(unavailable)?;
-        if bytes.len() > MAX_UPLOAD_BYTES || stored.saturating_add(bytes.len()) > MAX_STORED_BYTES {
+        if bytes.len() > MAX_UPLOAD_BYTES {
             return Err(ErrorData::invalid_params(
                 "credential upload exceeds its byte capacity",
                 None,
@@ -307,13 +379,15 @@ impl TransferFiles {
                 None,
             ));
         }
-        entry.file.size = Some(bytes.len() as u64);
+        let size = bytes.len() as u64;
+        let bytes = self.store_bytes(bytes)?;
+        entry.file.size = Some(size);
         entry.bytes = Some(bytes);
         entry.grant = None;
         Ok(())
     }
 
-    fn download(&self, id: &str, token: &str) -> Result<Zeroizing<Vec<u8>>, ErrorData> {
+    fn download(&self, id: &str, token: &str) -> Result<StoredBytes, ErrorData> {
         let mut entries = self
             .entries
             .lock()
@@ -369,7 +443,8 @@ impl CredentialFiles for TransferFiles {
             .lock()
             .expect("credential transfer registry poisoned");
         prune(&mut entries);
-        admit(&entries, bytes.len())?;
+        admit(&entries)?;
+        let bytes = self.store_bytes(bytes)?;
         if entries.contains_key(&id) {
             return Err(ErrorData::internal_error("file identifier collision", None));
         }
@@ -405,6 +480,7 @@ impl CredentialFiles for TransferFiles {
         entries
             .remove(id)
             .and_then(|entry| entry.bytes)
+            .map(|stored| stored.bytes)
             .ok_or_else(unavailable)
     }
 }
@@ -413,6 +489,30 @@ fn bearer(request: &Request) -> Option<&str> {
     let mut values = request.headers().get_all(header::AUTHORIZATION).iter();
     let token = values.next()?.to_str().ok()?.strip_prefix("Bearer ")?;
     (values.next().is_none() && token.len() == 43).then_some(token)
+}
+
+pub(crate) async fn authenticate_transfer(
+    State(files): State<Arc<TransferFiles>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let direction = match request.method().as_str() {
+        "PUT" => Direction::Upload,
+        "GET" => Direction::Download,
+        _ => return StatusCode::METHOD_NOT_ALLOWED.into_response(),
+    };
+    let id = request.uri().path().strip_prefix(HTTP_PREFIX);
+    let valid = id.zip(bearer(&request)).is_some_and(|(id, token)| {
+        id.len() == 43
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+            && files.admits_grant(id, token, direction)
+    });
+    if !valid {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    next.run(request).await
 }
 
 pub(crate) async fn upload_http(
@@ -450,12 +550,12 @@ pub(crate) async fn download_http(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     match files.download(&id, token) {
-        Ok(mut bytes) => (
+        Ok(stored) => (
             [
                 (header::CONTENT_TYPE, "application/octet-stream"),
                 (header::CACHE_CONTROL, "no-store"),
             ],
-            Body::from(std::mem::take(&mut *bytes)),
+            Body::new(DownloadBody { stored, offset: 0 }),
         )
             .into_response(),
         Err(_) => StatusCode::BAD_REQUEST.into_response(),
@@ -465,6 +565,78 @@ pub(crate) async fn download_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_http_capability_matches_the_returned_transport() {
+        let meta = |transports| {
+            Meta(
+                serde_json::from_value(json!({
+                    "io.modelcontextprotocol/clientCapabilities":{"files":{
+                        "upload":true,"download":true,"transports":transports
+                    }}
+                }))
+                .unwrap(),
+            )
+        };
+        assert!(!supports_http(&meta(json!(["https"])), "upload"));
+        assert!(supports_http(&meta(json!(["https", "http"])), "upload"));
+        assert!(supports_http(&meta(json!(["http"])), "download"));
+    }
+
+    #[test]
+    fn pending_downloads_keep_their_byte_capacity_after_leaving_the_registry() {
+        let files = TransferFiles::default();
+        let file = files
+            .publish(
+                "alice",
+                "token",
+                "text/plain",
+                Zeroizing::new(vec![1; MAX_DOWNLOAD_BYTES]),
+            )
+            .unwrap();
+        let authorization = files
+            .authorize_download(
+                "alice",
+                &DownloadParams {
+                    _meta: BTreeMap::new(),
+                    uri: file.uri.clone(),
+                },
+                &base(),
+            )
+            .unwrap();
+        let pending = files
+            .download(
+                file_id(&file.uri).unwrap(),
+                &token(&authorization, "download"),
+            )
+            .unwrap();
+        assert!(files.entries.lock().unwrap().is_empty());
+        assert_eq!(
+            files.capacity.available_permits(),
+            MAX_STORED_BYTES - MAX_DOWNLOAD_BYTES
+        );
+        for _ in 1..MAX_STORED_BYTES / MAX_DOWNLOAD_BYTES {
+            files
+                .publish(
+                    "alice",
+                    "token",
+                    "text/plain",
+                    Zeroizing::new(vec![1; MAX_DOWNLOAD_BYTES]),
+                )
+                .unwrap();
+        }
+        assert!(
+            files
+                .publish("alice", "token", "text/plain", Zeroizing::new(vec![1]))
+                .is_err()
+        );
+        drop(pending);
+        assert!(
+            files
+                .publish("alice", "token", "text/plain", Zeroizing::new(vec![1]))
+                .is_ok()
+        );
+    }
 
     fn base() -> Url {
         Url::parse("http://localhost/").unwrap()

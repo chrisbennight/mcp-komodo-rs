@@ -33,7 +33,8 @@ impl ExecutionBudget {
         Ok(())
     }
 
-    pub(crate) async fn ended(&self) {
+    /// Wait until the shared request deadline or cancellation ends its lifetime.
+    pub async fn ended(&self) {
         tokio::select! {
             () = self.cancellation.cancelled() => {},
             () = tokio::time::sleep_until(self.deadline) => {},

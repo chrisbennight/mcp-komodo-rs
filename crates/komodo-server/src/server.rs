@@ -94,8 +94,12 @@ pub fn build_router(
             "/file-transfers/{id}",
             get(crate::files::download_http).put(crate::files::upload_http),
         )
-        .with_state(files)
-        .layer(middleware::from_fn_with_state(limits, admit));
+        .with_state(files.clone())
+        .layer(middleware::from_fn_with_state(limits, admit))
+        .layer(middleware::from_fn_with_state(
+            files,
+            crate::files::authenticate_transfer,
+        ));
 
     Ok(Router::new()
         .route("/healthz", get(healthz))

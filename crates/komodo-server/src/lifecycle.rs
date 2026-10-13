@@ -1,13 +1,21 @@
 //! Keep admission ownership alive for detached MCP handler work.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use axum::{
+    body::{Body, Bytes, HttpBody},
     extract::{Request, State},
     http::{StatusCode, request::Parts},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use http_body::{Frame, SizeHint};
 use komodo_mcp::{KomodoMcp, execution::ExecutionBudget};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -67,7 +75,7 @@ pub(crate) async fn admit(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let cancellation = limits.shutdown.child_token();
-    let _cancel_on_drop = cancellation.clone().drop_guard();
+    let cancel_on_drop = cancellation.clone().drop_guard();
     let lease = RequestLease {
         _permit: Arc::new(permit),
         budget: ExecutionBudget::new(deadline, cancellation.clone()),
@@ -85,7 +93,47 @@ pub(crate) async fn admit(
             StatusCode::REQUEST_TIMEOUT,
             "request deadline exceeded; reconcile any submitted mutation before another write",
         ).into_response(),
-        response = next.run(request) => response,
+        response = next.run(request) => {
+            if response.body().is_end_stream() { return response; }
+            let (parts, inner) = response.into_parts();
+            let budget = lease.budget.clone();
+            Response::from_parts(parts, Body::new(LifetimeBody {
+                inner, _lease: lease, _cancel_on_drop: cancel_on_drop,
+                ended: Box::pin(async move { budget.ended().await; }),
+            }))
+        },
+    }
+}
+
+struct LifetimeBody {
+    inner: Body,
+    _lease: RequestLease,
+    _cancel_on_drop: tokio_util::sync::DropGuard,
+    ended: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl HttpBody for LifetimeBody {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+        if self.ended.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Some(Err(axum::Error::new(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "response request lifetime ended",
+            )))));
+        }
+        Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
     }
 }
 
@@ -196,6 +244,37 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[tokio::test]
+    async fn response_body_retains_admission_and_stops_at_its_deadline() {
+        let limits = RequestLimits::new(1, Duration::from_millis(50), CancellationToken::new());
+        let router = Router::new()
+            .route("/", post(|| async { "bounded response" }))
+            .layer(middleware::from_fn_with_state(limits, admit));
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/")
+                .body(Body::empty())
+                .unwrap()
+        };
+        let response = router.clone().oneshot(request()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            router.clone().oneshot(request()).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            router.oneshot(request()).await.unwrap().status(),
+            StatusCode::OK
+        );
+    }
 
     #[tokio::test]
     async fn detached_work_retains_admission_after_http_timeout() {

@@ -20,6 +20,7 @@ base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
 getrandom = "0.4"
+http-body = "1"
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 jsonschema = { version = "0.52", default-features = false }
 komodo-api = { version = "0.1.0", path = "crates/komodo-api" }
