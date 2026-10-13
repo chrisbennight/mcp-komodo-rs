@@ -1248,6 +1248,7 @@ version = "0.1.0"
 dependencies = [
  "jsonschema",
  "komodo-api",
+ "percent-encoding",
  "rmcp",
  "schemars",
  "serde",

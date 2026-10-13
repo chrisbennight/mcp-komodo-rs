@@ -1,6 +1,7 @@
 //! Operation configuration history and explicit literal credential fields.
 
 use komodo_api::OperationItem;
+use percent_encoding::percent_decode_str;
 use schemars::JsonSchema;
 use serde::Serialize;
 use toml_edit::{DocumentMut, Item, TableLike};
@@ -49,19 +50,19 @@ impl PreparedDocument {
                 _ => {}
             }
         }
-        if fields.is_empty() {
-            Ok(Self {
-                toml: original,
-                credential_fields: fields,
-                original: None,
-            })
+        let (toml, original) = if fields.is_empty() {
+            (original, None)
         } else {
-            Ok(Self {
-                toml: document.to_string(),
-                credential_fields: fields,
-                original: Some(Zeroizing::new(original.into_bytes())),
-            })
-        }
+            (
+                document.to_string(),
+                Some(Zeroizing::new(original.into_bytes())),
+            )
+        };
+        Ok(Self {
+            toml,
+            credential_fields: fields,
+            original,
+        })
     }
 
     fn publish(self, handler: &KomodoMcp, name: &'static str) -> HistoryDocument {
@@ -303,25 +304,24 @@ fn project_uri_components(original: &str, kind: Option<&str>) -> Option<String> 
 }
 
 fn project_endpoint_path(path: &str, kind: Option<&str>) -> Option<String> {
-    if !matches!(kind, Some("Slack" | "Discord")) {
-        return None;
-    }
+    let (marker, offset) = match kind {
+        Some("Slack") => ("services", 3),
+        Some("Discord") => ("webhooks", 2),
+        _ => return None,
+    };
     // Interpret dot segments with the standard parser independently of the
     // endpoint authority, which may have an invalid host or port.
     let mut normalized = Url::parse("https://endpoint.invalid/").expect("fixed parsing base");
     normalized.set_path(path);
     let mut parts = normalized.path().split('/').collect::<Vec<_>>();
-    let credential_index = match kind {
-        Some("Slack") => parts
-            .iter()
-            .position(|part| *part == "services")
-            .map(|index| index + 3),
-        Some("Discord") => parts
-            .iter()
-            .position(|part| *part == "webhooks")
-            .map(|index| index + 2),
-        _ => None,
-    };
+    let credential_index = parts
+        .iter()
+        .position(|part| {
+            percent_decode_str(part)
+                .decode_utf8()
+                .is_ok_and(|p| p == marker)
+        })
+        .map(|index| index + offset);
     let index =
         credential_index.filter(|index| parts.get(*index).is_some_and(|part| !part.is_empty()))?;
     parts[index] = URL_CREDENTIAL;
@@ -487,13 +487,13 @@ mod tests {
         for (kind, url, ordinary) in [
             (
                 "Slack",
-                "https://hooks.slack.com/services/TPUBLIC%2FNAME/BPUBLIC%20NAME/synthetic-url-token",
+                "https://hooks.slack.com/%73ervices/TPUBLIC%2FNAME/BPUBLIC%20NAME/synthetic-url-token",
                 "TPUBLIC%2FNAME/BPUBLIC%20NAME",
             ),
             (
                 "Discord",
-                "https://discord.com/api/webhooks/public%20identifier/synthetic-url-token/extra%2Fpath",
-                "webhooks/public%20identifier",
+                "https://discord.com/api/%77ebhooks/public%20identifier/synthetic-url-token/extra%2Fpath",
+                "%77ebhooks/public%20identifier",
             ),
         ] {
             let source = alerter_document(kind, url);

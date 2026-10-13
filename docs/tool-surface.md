@@ -151,12 +151,10 @@ logs remain available through `operations.logs.read`. These named projections
 are semantic contracts, not disclosure policy.
 
 Operation search and status expose `previousConfiguration` and
-`currentConfiguration` when Core supplies history. Each includes ordinary `toml`,
-explicit `credentialFields`, and native `originalFile` metadata when literal
-credentials occur. Ordinary documents remain exact inline text. Credential-bearing
-documents retain ordinary facts inline and their exact original through native
-file transfer. Missing native support or capacity is reported explicitly without
-removing operation metadata or ordinary configuration. See
+`currentConfiguration` when Core supplies history. Each includes `toml`,
+`credentialFields`, and native `originalFile` metadata. Ordinary facts stay
+inline; literal credentials use exact native originals with explicit transfer
+unavailability. See
 [history credential fields](file-transfers.md#configuration-history).
 
 Content reads expose typed configuration and content under the bounded upstream

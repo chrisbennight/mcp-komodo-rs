@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 komodo-api.workspace = true
+percent-encoding.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
