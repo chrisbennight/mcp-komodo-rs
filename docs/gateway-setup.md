@@ -49,21 +49,26 @@ The gateway-specific connection and tool-name scaffold is also available:
 cargo run --locked -p komodo-server -- --emit-gateway-manifest
 ```
 
-This scaffold is not ready to publish: its supported gateway requires an
-operator-selected risk and an `approved_behavior_hash` for each tool, obtained from that gateway's live
-manifest-change preview. Configure its URL and bearer secret reference for your
-deployment, then follow your gateway's admission procedure. Do not maintain a
-separate hand-edited copy of the source tool identities or behavior declarations.
+This scaffold is not ready to publish. Configure its URL and bearer secret
+reference, choose the gateway's classification authority, and supply operator
+policy through the gateway's admission procedure. Do not maintain a separate
+hand-edited copy of the source tool identities or behavior declarations.
 
-The scaffold contains no tool risk, sensitivity, role, or approval choices.
+The scaffold contains no classification authority, tool risk, sensitivity, role,
+or approval choices. For Waygate, configure `classification_mode: manifest`
+externally and supply the deployment's risk, side-effect, disclosure, role, and
+approval decisions there. Its `mcp_annotations` mode requires policy metadata
+that this semantic interface does not publish; standard MCP hints alone do not
+satisfy that mode's admission contract.
 Operators choose risk, disclosure, roles, and approvals for
 their deployment; a risk label alone is not authorization or approval policy.
 
 Before publishing, compare the complete generated tool-name set with the live
 upstream and gateway catalog. Inspect every missing tool, changed schema, and
-behavior-hash mismatch. Use the gateway preview to obtain and review current
-behavior hashes; a hash is an approval record, not a value to copy blindly to
-make a mismatch disappear. Re-preview the complete intended manifest and
+contract mismatch. Review contract changes through the gateway's admission
+procedure. Where the selected mode requires an `approved_behavior_hash`, obtain
+it from the current preview; a hash is an approval record, not a value to copy
+blindly to make a mismatch disappear. Re-preview the complete intended manifest and
 resolve quarantine findings before requesting publication approval. Preserve
 unrelated manifests and use the control plane's current revision precondition.
 
