@@ -2,6 +2,7 @@
 
 pub mod execution;
 pub mod files;
+mod networks;
 
 use std::{
     borrow::Cow,
@@ -120,6 +121,8 @@ enum ToolKind {
     SystemStatus,
     ServersSearch,
     ServersStatus,
+    ServersNetworksSearch,
+    ServersNetworksRead,
     StacksSearch,
     StacksStatus,
     StacksDiagnostics,
@@ -228,6 +231,16 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
         ToolKind::ServersStatus,
         "servers.status",
         "Get one server's normalized health and typed Core list facts, including addresses, public keys, and alert metadata.",
+    ),
+    read_spec(
+        ToolKind::ServersNetworksSearch,
+        "servers.networks.search",
+        "Search a server's Docker network inventory, retaining names, identifiers, drivers, IPAM subnets and gateways, and attachment flags reported by Core. Results use bounded collection pages.",
+    ),
+    read_spec(
+        ToolKind::ServersNetworksRead,
+        "servers.networks.read",
+        "Read a named network on one server with typed IPAM settings, options, labels, and attached endpoint identifiers and MAC, IPv4, and IPv6 addresses reported by Core.",
     ),
     read_spec(
         ToolKind::StacksSearch,
@@ -1357,6 +1370,8 @@ impl KomodoMcp {
             ToolKind::SystemStatus => self.system_status(params).await,
             ToolKind::ServersSearch => self.search_servers(params).await,
             ToolKind::ServersStatus => self.server_status(params).await,
+            ToolKind::ServersNetworksSearch => self.search_networks(params).await,
+            ToolKind::ServersNetworksRead => self.read_network(params).await,
             ToolKind::StacksSearch => self.search_stacks(params).await,
             ToolKind::StacksStatus => self.stack_status(params).await,
             ToolKind::StacksDiagnostics => self.stack_diagnostics(params).await,
@@ -2083,6 +2098,12 @@ impl ToolSpec {
             ToolKind::SystemStatus => tool::<EmptyInput, SystemStatusOutput>(self),
             ToolKind::ServersSearch => tool::<SearchInput, ServerSearchOutput>(self),
             ToolKind::ServersStatus => tool::<SelectorInput, ServerStatus>(self),
+            ToolKind::ServersNetworksSearch => {
+                tool::<networks::SearchInput, networks::SearchOutput>(self)
+            }
+            ToolKind::ServersNetworksRead => {
+                tool::<networks::ReadInput, networks::ReadOutput>(self)
+            }
             ToolKind::StacksSearch => tool::<SearchInput, StackSearchOutput>(self),
             ToolKind::StacksStatus => tool::<SelectorInput, StackStatus>(self),
             ToolKind::StacksDiagnostics => tool::<CollectionReadInput, StackDiagnostics>(self),
@@ -3139,6 +3160,38 @@ mod tests {
             })
         }
 
+        fn networks<'a>(
+            &'a self,
+            server: &'a str,
+        ) -> ApiFuture<'a, Vec<komodo_api::networks::NetworkListItem>> {
+            Box::pin(async move {
+                self.before_read()?;
+                assert_eq!(server, "server-1");
+                Ok(serde_json::from_value(json!([
+                    {"id":"network-z","name":"Zulu","ipam_subnet":"10.20.0.0/24","ipam_gateway":"10.20.0.1","in_use":true},
+                    {"id":"network-a","name":"Alpha","ipam_subnet":"fd00::/64","ipam_gateway":"fd00::1","enable_ipv6":true,"in_use":false}
+                ])).unwrap())
+            })
+        }
+
+        fn network<'a>(
+            &'a self,
+            server: &'a str,
+            network: &'a str,
+        ) -> ApiFuture<'a, komodo_api::networks::Network> {
+            Box::pin(async move {
+                self.before_read()?;
+                assert_eq!(server, "server-1");
+                assert_eq!(network, "network-z");
+                Ok(serde_json::from_value(json!({
+                    "Name":"Zulu","Id":"network-z","Driver":"bridge","Internal":false,
+                    "IPAM":{"Driver":"default","Config":[{"Subnet":"10.20.0.0/24","IPRange":"10.20.0.128/25","Gateway":"10.20.0.1","AuxiliaryAddresses":{"router":"10.20.0.2"}}],"Options":{"allocation":"automatic"}},
+                    "Containers":[{"ContainerID":"container-1","Name":"application","EndpointID":"endpoint-1","MacAddress":"02:42:0a:14:00:03","IPv4Address":"10.20.0.3/24","IPv6Address":"fd00::3/64"}],
+                    "Options":{"com.docker.network.bridge.name":"br-application"},"Labels":{"owner":"$(ordinary-untrusted-label)"}
+                })).unwrap())
+            })
+        }
+
         fn stacks(&self) -> ApiFuture<'_, Vec<ResourceListItem<StackInfo>>> {
             Box::pin(async move {
                 self.before_read()?;
@@ -3685,6 +3738,8 @@ mod tests {
             "system.status",
             "servers.search",
             "servers.status",
+            "servers.networks.search",
+            "servers.networks.read",
             "stacks.search",
             "stacks.status",
             "deployments.search",
@@ -3947,6 +4002,8 @@ mod tests {
                 "system.status",
                 "servers.search",
                 "servers.status",
+                "servers.networks.search",
+                "servers.networks.read",
                 "stacks.search",
                 "stacks.status",
                 "deployments.search",
@@ -4018,6 +4075,158 @@ mod tests {
         assert_eq!(
             wire["_meta"][TRUST_ANNOTATIONS_KEY],
             json!({"untrusted": true})
+        );
+    }
+
+    #[tokio::test]
+    async fn network_inventory_preserves_addresses_and_every_filtered_page_with_read_credentials() {
+        let handler = KomodoMcp::read_only(Arc::new(FakeApi::default()))
+            .with_tool_profile(super::ToolProfile::Status);
+        for (input, name, subnet, gateway, next, total) in [
+            (
+                json!({"server":"mini","window":{"limit":1}}),
+                "Alpha",
+                "fd00::/64",
+                "fd00::1",
+                json!(1),
+                2,
+            ),
+            (
+                json!({"server":"server-1","window":{"offset":1,"limit":1}}),
+                "Zulu",
+                "10.20.0.0/24",
+                "10.20.0.1",
+                Value::Null,
+                2,
+            ),
+            (
+                json!({"server":"server-1","query":" NETWORK-Z "}),
+                "Zulu",
+                "10.20.0.0/24",
+                "10.20.0.1",
+                Value::Null,
+                1,
+            ),
+        ] {
+            let result = handler
+                .dispatch(
+                    &CallToolRequestParams::new("servers.networks.search")
+                        .with_arguments(arguments(&input)),
+                )
+                .await
+                .unwrap();
+            let output = result.structured_content.unwrap();
+            assert_eq!(output["server"], json!({"id":"server-1","name":"mini"}));
+            assert_eq!(output["items"][0]["name"], name);
+            assert_eq!(output["items"][0]["ipam_subnet"], subnet);
+            assert_eq!(output["items"][0]["ipam_gateway"], gateway);
+            assert_eq!(output["itemsPage"]["nextOffset"], next);
+            assert_eq!(output["itemsPage"]["totalObserved"], total);
+        }
+        let result = handler
+            .dispatch(
+                &CallToolRequestParams::new("servers.networks.search")
+                    .with_arguments(arguments(&json!({"server":"mini","query":"absent"}))),
+            )
+            .await
+            .unwrap();
+        let output = result.structured_content.unwrap();
+        assert_eq!(output["items"], json!([]));
+        assert_eq!(output["itemsPage"]["available"], true);
+        assert_eq!(output["itemsPage"]["totalObserved"], 0);
+    }
+
+    #[tokio::test]
+    async fn network_detail_keeps_ipam_endpoints_options_and_labels_without_admin_credentials() {
+        let handler = KomodoMcp::read_only(Arc::new(FakeApi::default()));
+        let result = handler
+            .dispatch(
+                &CallToolRequestParams::new("servers.networks.read")
+                    .with_arguments(arguments(&json!({"server":"mini","network":"network-z"}))),
+            )
+            .await
+            .unwrap();
+        let wire = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            wire["_meta"][TRUST_ANNOTATIONS_KEY],
+            json!({"untrusted":true})
+        );
+        let output = result.structured_content.unwrap();
+        let network = &output["network"];
+        assert_eq!(output["server"]["id"], "server-1");
+        assert_eq!(network["id"], "network-z");
+        assert_eq!(network["internal"], false);
+        assert_eq!(network["attachable"], Value::Null);
+        assert_eq!(
+            network["ipam"]["config"][0],
+            json!({
+                "subnet":"10.20.0.0/24","ip_range":"10.20.0.128/25","gateway":"10.20.0.1",
+                "auxiliary_addresses":{"router":"10.20.0.2"}
+            })
+        );
+        assert_eq!(network["ipam"]["options"]["allocation"], "automatic");
+        assert_eq!(
+            network["containers"][0],
+            json!({
+                "container_id":"container-1","name":"application","endpoint_id":"endpoint-1",
+                "mac_address":"02:42:0a:14:00:03","ipv4_address":"10.20.0.3/24","ipv6_address":"fd00::3/64"
+            })
+        );
+        assert_eq!(
+            network["options"]["com.docker.network.bridge.name"],
+            "br-application"
+        );
+        assert_eq!(network["labels"]["owner"], "$(ordinary-untrusted-label)");
+    }
+
+    #[tokio::test]
+    async fn network_input_validation_finishes_before_any_upstream_read() {
+        let api = Arc::new(FakeApi::default());
+        let handler = KomodoMcp::read_only(api.clone());
+        for (name, input) in [
+            ("servers.networks.search", json!({"server":"","query":null})),
+            (
+                "servers.networks.search",
+                json!({"server":"mini","query":"\n"}),
+            ),
+            (
+                "servers.networks.search",
+                json!({"server":"mini","query":"é".repeat(65)}),
+            ),
+            (
+                "servers.networks.search",
+                json!({"server":"mini","window":{"limit":0}}),
+            ),
+            (
+                "servers.networks.search",
+                json!({"server":"mini","window":{"offset":2_097_153}}),
+            ),
+            (
+                "servers.networks.read",
+                json!({"server":"mini","network":""}),
+            ),
+            (
+                "servers.networks.read",
+                json!({"server":"\n","network":"network-z"}),
+            ),
+            (
+                "servers.networks.read",
+                json!({"server":"mini","network":"é".repeat(65)}),
+            ),
+            (
+                "servers.networks.read",
+                json!({"server":"mini","network":"network-z","endpoint":"/raw"}),
+            ),
+        ] {
+            let error = handler
+                .dispatch(&CallToolRequestParams::new(name).with_arguments(arguments(&input)))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        }
+        assert_eq!(
+            api.read_attempts.load(std::sync::atomic::Ordering::SeqCst),
+            0
         );
     }
 
@@ -4499,6 +4708,11 @@ mod tests {
         let mut cases = vec![
             ("system.status", json!({})),
             ("servers.search", search.clone()),
+            ("servers.networks.search", json!({"server":"server-1"})),
+            (
+                "servers.networks.read",
+                json!({"server":"server-1","network":"network-z"}),
+            ),
             ("stacks.search", search.clone()),
             ("deployments.search", search.clone()),
             ("builds.search", search.clone()),

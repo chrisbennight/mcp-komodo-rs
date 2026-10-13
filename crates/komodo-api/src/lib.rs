@@ -1,5 +1,7 @@
 //! Bounded, typed access to the Komodo Core API.
 
+pub mod networks;
+
 use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use reqwest::{Client as HttpClient, StatusCode, redirect::Policy};
@@ -595,6 +597,9 @@ pub type ApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ApiError>> + S
 pub trait KomodoApi: Send + Sync {
     fn version(&self) -> ApiFuture<'_, String>;
     fn servers(&self) -> ApiFuture<'_, Vec<ResourceListItem<ServerInfo>>>;
+    fn networks<'a>(&'a self, server: &'a str) -> ApiFuture<'a, Vec<networks::NetworkListItem>>;
+    fn network<'a>(&'a self, server: &'a str, network: &'a str)
+    -> ApiFuture<'a, networks::Network>;
     fn stacks(&self) -> ApiFuture<'_, Vec<ResourceListItem<StackInfo>>>;
     fn deployments(&self) -> ApiFuture<'_, Vec<ResourceListItem<DeploymentInfo>>>;
     fn builds(&self) -> ApiFuture<'_, Vec<ResourceListItem<BuildInfo>>>;
@@ -742,6 +747,39 @@ impl KomodoApi for Client {
 
     fn servers(&self) -> ApiFuture<'_, Vec<ResourceListItem<ServerInfo>>> {
         Box::pin(async move { self.read("ListServers").await })
+    }
+
+    fn networks<'a>(&'a self, server: &'a str) -> ApiFuture<'a, Vec<networks::NetworkListItem>> {
+        Box::pin(async move {
+            let variant = match networks::uses_current_names(&self.version().await?) {
+                Some(true) => "ListNetworks",
+                Some(false) => "ListDockerNetworks",
+                None => return Err(ApiError::IncompatibleResponse),
+            };
+            self.post("read", variant, json!({"server":server}), true)
+                .await
+        })
+    }
+
+    fn network<'a>(
+        &'a self,
+        server: &'a str,
+        network: &'a str,
+    ) -> ApiFuture<'a, networks::Network> {
+        Box::pin(async move {
+            let variant = match networks::uses_current_names(&self.version().await?) {
+                Some(true) => "InspectNetwork",
+                Some(false) => "InspectDockerNetwork",
+                None => return Err(ApiError::IncompatibleResponse),
+            };
+            self.post(
+                "read",
+                variant,
+                json!({"server":server,"network":network}),
+                true,
+            )
+            .await
+        })
     }
 
     fn stacks(&self) -> ApiFuture<'_, Vec<ResourceListItem<StackInfo>>> {

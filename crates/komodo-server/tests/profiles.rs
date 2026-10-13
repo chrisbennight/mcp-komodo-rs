@@ -5,10 +5,10 @@ use serde_json::Value;
 #[test]
 fn binary_exports_selected_profiles_without_runtime_credentials() {
     for (profile, expected_count) in [
-        ("status", 22),
-        ("read-only", 22),
-        ("operations", 30),
-        ("full", 37),
+        ("status", 24),
+        ("read-only", 24),
+        ("operations", 32),
+        ("full", 39),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_komodo-mcp-rs"))
             .env_clear()
