@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use aho_corasick::{AhoCorasick, MatchKind};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::ReportedError;
@@ -27,6 +28,7 @@ pub struct UpstreamFailure {
     pub request: &'static str,
     pub diagnostic: Option<Diagnostic>,
     pub diagnostic_unavailable: Option<&'static str>,
+    pub credential_values_present: Option<bool>,
     original: Option<Zeroizing<Vec<u8>>>,
 }
 
@@ -59,7 +61,9 @@ impl UpstreamFailure {
         bytes: Vec<u8>,
         credentials: &[&str],
     ) -> Self {
+        let mut unavailable = None;
         let diagnostic = if bytes.is_empty() {
+            unavailable = Some("upstream response body is empty");
             None
         } else {
             serde_json::from_slice::<ReportedError>(&bytes)
@@ -73,31 +77,51 @@ impl UpstreamFailure {
                         })
                 })
         };
+        if diagnostic.is_none() && unavailable.is_none() {
+            unavailable = Some("upstream response body has unsupported encoding");
+        }
+        let inspected = diagnostic.is_some();
+        let Ok(matcher) = AhoCorasick::builder()
+            .match_kind(MatchKind::LeftmostLongest)
+            .build(credentials.iter().filter(|value| !value.is_empty()))
+        else {
+            return Self {
+                status,
+                request,
+                diagnostic: None,
+                diagnostic_unavailable: Some(
+                    "credential projection unavailable; use original file",
+                ),
+                credential_values_present: None,
+                original: Some(Zeroizing::new(bytes)),
+            };
+        };
         let mut credential_present = false;
         let mut fragmented = false;
         let diagnostic = diagnostic.map(|diagnostic| Diagnostic {
             error: project_text(
                 diagnostic.error,
-                credentials,
+                &matcher,
                 &mut credential_present,
                 &mut fragmented,
             ),
             trace: diagnostic
                 .trace
                 .into_iter()
-                .map(|text| {
-                    project_text(text, credentials, &mut credential_present, &mut fragmented)
-                })
+                .map(|text| project_text(text, &matcher, &mut credential_present, &mut fragmented))
                 .collect(),
         });
         Self {
             status,
             request,
             diagnostic: (!fragmented).then_some(diagnostic).flatten(),
-            diagnostic_unavailable: fragmented.then_some(
-                "credential-separated text exceeds inline segment bound; use original file",
-            ),
+            diagnostic_unavailable: fragmented
+                .then_some(
+                    "credential-separated text exceeds inline segment bound; use original file",
+                )
+                .or(unavailable),
             original: credential_present.then(|| Zeroizing::new(bytes)),
+            credential_values_present: inspected.then_some(credential_present),
         }
     }
 
@@ -107,6 +131,7 @@ impl UpstreamFailure {
             request,
             diagnostic: None,
             diagnostic_unavailable: Some(reason),
+            credential_values_present: None,
             original: None,
         }
     }
@@ -120,25 +145,17 @@ impl UpstreamFailure {
 
 fn project_text(
     mut text: String,
-    credentials: &[&str],
+    matcher: &AhoCorasick,
     present: &mut bool,
     fragmented: &mut bool,
 ) -> DiagnosticText {
-    // Cache each next match, including absence: each credential searches disjoint
-    // suffixes, so a short repeated value cannot repeatedly scan absent values.
-    let mut matches: Vec<_> = credentials
-        .iter()
-        .filter(|value| !value.is_empty())
-        .map(|value| (*value, text.find(value)))
-        .collect();
     let mut cursor = 0;
     let mut segments = Vec::new();
     let mut changed = false;
-    while let Some((start, length)) = matches
-        .iter()
-        .filter_map(|(value, position)| position.map(|start| (start, value.len())))
-        .min_by_key(|(start, length)| (*start, std::cmp::Reverse(*length)))
-    {
+    // Leftmost-longest matching preserves credential-free text segments without
+    // rebuilding or rescanning long overlapping patterns after each match.
+    for found in matcher.find_iter(text.as_str()) {
+        let start = found.start();
         if start > cursor {
             if segments.len() == 256 {
                 *fragmented = true;
@@ -148,12 +165,7 @@ fn project_text(
         }
         changed = true;
         *present = true;
-        cursor = start + length;
-        for (value, position) in &mut matches {
-            if position.is_some_and(|start| start < cursor) {
-                *position = text[cursor..].find(*value).map(|offset| cursor + offset);
-            }
-        }
+        cursor = found.end();
     }
     if !changed {
         return DiagnosticText::Complete(text);
@@ -249,7 +261,7 @@ mod tests {
         );
         assert!(start.elapsed() < std::time::Duration::from_secs(2));
         assert_eq!(
-            serde_json::to_value(failure.diagnostic.unwrap()).unwrap()["error"],
+            serde_json::to_value(failure.diagnostic.as_ref().unwrap()).unwrap()["error"],
             json!({"segments":[]})
         );
         let mut fragmented = UpstreamFailure::from_response(
@@ -276,6 +288,32 @@ mod tests {
                 error.mutation_outcome_unknown(),
                 !matches!(status, 401 | 403 | 404)
             );
+        }
+    }
+
+    #[test]
+    fn overlapping_periodic_credentials_have_bounded_work_and_no_inline_value() {
+        let long = "ba".repeat(131_072);
+        let text = "ab".repeat(1_000_000);
+        assert!(text[1..].starts_with(&long));
+        let body = serde_json::to_vec(&json!({"error":text,"trace":[]})).unwrap();
+        let start = std::time::Instant::now();
+        let mut failure =
+            UpstreamFailure::from_response(400, "UpdateStack", body.clone(), &["ab", &long]);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        assert_eq!(
+            serde_json::to_value(failure.diagnostic.as_ref().unwrap()).unwrap()["error"],
+            json!({"segments":[]})
+        );
+        assert_eq!(*failure.take_credential_document().unwrap(), body);
+        for (bytes, reason) in [
+            (vec![], "upstream response body is empty"),
+            (vec![255], "upstream response body has unsupported encoding"),
+        ] {
+            let failure =
+                UpstreamFailure::from_response(400, "GetVersion", bytes, &["actual-literal-value"]);
+            assert!(failure.diagnostic.is_none());
+            assert_eq!(failure.diagnostic_unavailable, Some(reason));
         }
     }
 }
