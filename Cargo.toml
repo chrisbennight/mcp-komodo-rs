@@ -18,7 +18,7 @@ anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
-ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
+ed25519-dalek = { version = "3.0", features = ["pkcs8"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 jsonschema = { version = "0.52", default-features = false }
 komodo-api = { version = "0.1.0", path = "crates/komodo-api" }
