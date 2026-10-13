@@ -11,7 +11,7 @@ use crate::auth::{AuthConfigError, GatewayBearers, IdentityVerifierSettings};
 const MAXIMUM_SECRET_BYTES: usize = 16 * 1024;
 type EnvironmentLookup<'a> = dyn Fn(&'static str) -> Result<String, env::VarError> + 'a;
 
-/// Configuration needed by a local status-only process.
+/// Configuration needed by a local process using the read upstream identity.
 #[derive(Debug)]
 pub struct ReadSettings {
     pub upstream_url: Url,
@@ -57,7 +57,7 @@ pub struct Settings {
     pub upstream_url: Url,
     pub upstream_timeout: Duration,
     pub read_credentials: Credentials,
-    pub admin_credentials: Credentials,
+    pub admin_credentials: Option<Credentials>,
     pub allowed_hosts: Vec<String>,
     pub allowed_origins: Vec<String>,
     pub request_timeout: Duration,
@@ -100,13 +100,29 @@ impl Settings {
         Self::from_environment(&|variable| env::var(variable))
     }
 
+    /// Load HTTP settings without reading unused administrative credentials.
+    ///
+    /// # Errors
+    /// Returns an error for invalid read, listener, or gateway settings.
+    pub fn read_only_from_env() -> Result<Self, SettingsError> {
+        Self::from_environment_with_admin(&|variable| env::var(variable), false)
+    }
+
     fn from_environment(environment: &EnvironmentLookup<'_>) -> Result<Self, SettingsError> {
+        Self::from_environment_with_admin(environment, true)
+    }
+
+    fn from_environment_with_admin(
+        environment: &EnvironmentLookup<'_>,
+        include_admin: bool,
+    ) -> Result<Self, SettingsError> {
         let listener = Self::listener_from_environment(environment)?;
         let read = ReadSettings::from_environment(environment)?;
-        let admin_credentials = Credentials::from_protected(
-            required_secret(environment, "KOMODO_MCP_ADMIN_API_KEY")?,
-            required_secret(environment, "KOMODO_MCP_ADMIN_API_SECRET")?,
-        )?;
+        let admin_credentials = if include_admin {
+            administrative_credentials(environment)?
+        } else {
+            None
+        };
         let current = required_secret(environment, "KOMODO_MCP_GATEWAY_BEARER_CURRENT")?;
         let previous = optional_secret(environment, "KOMODO_MCP_GATEWAY_BEARER_PREVIOUS")?;
         let jwks_url = parse_url(
@@ -187,6 +203,30 @@ fn required_secret(
 ) -> Result<Zeroizing<String>, SettingsError> {
     let value = environment(variable).map_err(|_| SettingsError::SecretEnvironment(variable))?;
     validate_secret(variable, value)
+}
+
+/// Load an optional administrative credential pair for enabled mutation tools.
+///
+/// # Errors
+/// Returns an error when only one credential is supplied or either is invalid.
+pub fn administrative_credentials_from_env() -> Result<Option<Credentials>, SettingsError> {
+    administrative_credentials(&|variable| env::var(variable))
+}
+
+fn administrative_credentials(
+    environment: &EnvironmentLookup<'_>,
+) -> Result<Option<Credentials>, SettingsError> {
+    match (
+        optional_secret(environment, "KOMODO_MCP_ADMIN_API_KEY")?,
+        optional_secret(environment, "KOMODO_MCP_ADMIN_API_SECRET")?,
+    ) {
+        (None, None) => Ok(None),
+        (Some(key), Some(secret)) => Credentials::from_protected(key, secret)
+            .map(Some)
+            .map_err(Into::into),
+        (None, Some(_)) => Err(SettingsError::Missing("KOMODO_MCP_ADMIN_API_KEY")),
+        (Some(_), None) => Err(SettingsError::Missing("KOMODO_MCP_ADMIN_API_SECRET")),
+    }
 }
 
 fn optional_secret(
@@ -296,11 +336,58 @@ fn parse_csv(value: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAXIMUM_SECRET_BYTES, Settings, SettingsError, parse_csv, parse_number_value,
-        validate_secret,
+        MAXIMUM_SECRET_BYTES, Settings, SettingsError, administrative_credentials, parse_csv,
+        parse_number_value, validate_secret,
     };
 
     use crate::auth::{AuthConfigError, IdentityVerifier};
+
+    #[test]
+    fn administrative_credentials_are_optional_but_a_supplied_pair_must_be_complete() {
+        let absent = |_| Err(std::env::VarError::NotPresent);
+        assert!(administrative_credentials(&absent).unwrap().is_none());
+        for missing in ["KOMODO_MCP_ADMIN_API_KEY", "KOMODO_MCP_ADMIN_API_SECRET"] {
+            let environment = |variable| {
+                if variable == missing {
+                    Err(std::env::VarError::NotPresent)
+                } else {
+                    Ok("synthetic-credential".to_owned())
+                }
+            };
+            assert!(
+                matches!(administrative_credentials(&environment), Err(SettingsError::Missing(name)) if name == missing)
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_http_settings_do_not_read_administrative_credentials() {
+        let environment = |variable: &'static str| {
+            assert!(!variable.starts_with("KOMODO_MCP_ADMIN_"));
+            let value = match variable {
+                "KOMODO_MCP_READ_API_KEY" => "synthetic-read-key",
+                "KOMODO_MCP_READ_API_SECRET" => "synthetic-read-secret",
+                "KOMODO_MCP_GATEWAY_BEARER_CURRENT" => "0123456789abcdef0123456789abcdef",
+                "KOMODO_MCP_IDENTITY_JWKS_URL" => "http://127.0.0.1:65533/jwks",
+                "KOMODO_MCP_IDENTITY_ISSUER" => "https://gateway.test",
+                "KOMODO_MCP_IDENTITY_ACTOR" => "gateway.test",
+                _ => return Err(std::env::VarError::NotPresent),
+            };
+            Ok(value.to_owned())
+        };
+        let settings = Settings::from_environment_with_admin(&environment, false).unwrap();
+        assert!(settings.admin_credentials.is_none());
+        let optional_admin_environment = |variable: &'static str| {
+            if variable.starts_with("KOMODO_MCP_ADMIN_") {
+                Err(std::env::VarError::NotPresent)
+            } else {
+                environment(variable)
+            }
+        };
+        let settings =
+            Settings::from_environment_with_admin(&optional_admin_environment, true).unwrap();
+        assert!(settings.admin_credentials.is_none());
+    }
 
     #[test]
     fn padded_actor_fails_the_complete_settings_and_verifier_path() {

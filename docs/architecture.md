@@ -7,10 +7,11 @@
 - `komodo-server` owns process configuration, credentials, ingress authentication,
   stdio and Streamable HTTP, health checks, and catalog emission.
 
-Local `--stdio` dispatches only ordinary status tools using read credentials.
+Local `--stdio` uses the selected capability profile and upstream clients.
 The launcher controls access to the process and its environment; no HTTP listener
-or gateway identity is used. Sensitive and mutating tools are rejected even if
-called directly by name. The HTTP profile follows the request path below.
+or gateway identity is used. Every read uses read credentials; mutations require
+a selected mutating profile and separate administrative credentials. Excluded
+tools are rejected even if called by name. The HTTP transport follows the request path below.
 
 ## Request path
 

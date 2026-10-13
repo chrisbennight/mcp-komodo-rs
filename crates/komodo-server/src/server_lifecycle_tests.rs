@@ -30,6 +30,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new(timeout: Duration) -> Self {
+        Self::with_administrative_credentials(timeout, true).await
+    }
+
+    async fn with_administrative_credentials(timeout: Duration, include_admin: bool) -> Self {
         let upstream = MockServer::start().await;
         let signing = SigningKey::from_bytes(&[7; 32]);
         Mock::given(method("GET"))
@@ -45,6 +49,9 @@ impl Fixture {
         config.identity.actor = "gateway.test".into();
         config.request_timeout = timeout;
         config.max_concurrent_requests = 1;
+        if !include_admin {
+            config.admin_credentials = None;
+        }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -69,15 +76,12 @@ impl Fixture {
             )
         };
         let cancellation = CancellationToken::new();
-        let router = build_router(
-            &config,
-            KomodoMcp::new(
-                make_client(config.read_credentials.clone()),
-                make_client(config.admin_credentials.clone()),
-            ),
-            &cancellation,
-        )
-        .unwrap();
+        let read = make_client(config.read_credentials.clone());
+        let handler = match &config.admin_credentials {
+            Some(credentials) => KomodoMcp::new(read, make_client(credentials.clone())),
+            None => KomodoMcp::read_only(read),
+        };
+        let router = build_router(&config, handler, &cancellation).unwrap();
         Self {
             upstream,
             router,
@@ -415,6 +419,52 @@ async fn literal_tokens_use_authenticated_native_files_in_both_directions() {
         StatusCode::UNAUTHORIZED
     );
     fixture.cancellation.cancel();
+}
+
+#[tokio::test]
+async fn authenticated_http_content_reads_work_without_administrative_credentials() {
+    let fixture = Fixture::with_administrative_credentials(Duration::from_secs(3), false).await;
+    fixture.stacks(Duration::ZERO).await;
+    Mock::given(method("POST"))
+        .and(path("/read"))
+        .and(body_partial_json(json!({"type":"GetStack"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config":{"environment":"TEST_MODE=available\n"}, "info":{}
+        })))
+        .expect(1)
+        .mount(&fixture.upstream)
+        .await;
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(fixture.request("stacks.environment.read", &json!({"selector":"stack"})))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert!(
+        String::from_utf8(bytes.to_vec())
+            .unwrap()
+            .contains("TEST_MODE=available")
+    );
+    assert_eq!(fixture.requests().await.len(), 2);
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(fixture.request("stacks.stop", &json!({"selector":"stack"})))
+        .await
+        .unwrap();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert!(
+        String::from_utf8(bytes.to_vec())
+            .unwrap()
+            .contains("-32601")
+    );
+    assert_eq!(
+        fixture.requests().await.len(),
+        2,
+        "a missing admin client cannot submit a mutation"
+    );
 }
 
 #[tokio::test]

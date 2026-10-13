@@ -1,6 +1,6 @@
-# Local status-only quickstart
+# Local read-only quickstart
 
-Use `--stdio` when a local MCP client should inspect Komodo status without a
+Use `--stdio --tool-profile read-only` when a local MCP client should read Komodo without a
 gateway. The client starts the server as its child process and owns access to
 its stdin, stdout, and environment. No HTTP listener is opened in this mode.
 Use a read-only Komodo service user restricted to the resources you intend to
@@ -32,7 +32,7 @@ Configure a stdio MCP server using your client's command/argument interface:
   "mcpServers": {
     "komodo-status": {
       "command": "/absolute/path/to/komodo-mcp-rs",
-      "args": ["--stdio"]
+      "args": ["--stdio", "--tool-profile", "read-only"]
     }
   }
 }
@@ -56,12 +56,14 @@ stdio to an unauthenticated network listener.
 Connect the client, initialize MCP, and list tools. Call `system.status` with
 `{}`. A result with `reachable: true` and the Core version confirms the process
 can authenticate to the upstream read API. Then try `stacks.search` with
-`{"limit": 10}`. Sensitive configuration, logs, diagnostics, secrets, and all
-writes are absent from this profile and rejected even if called by name.
+`{"limit": 10}`. Configuration, logs, diagnostics, Compose, and environment
+reads are available through their typed tools. Mutations are absent from this
+profile and rejected even if called by name. Literal credential values require
+native file transfer, which the HTTP gateway runtime provides.
 
 The integration test exercises the real binary through stdin/stdout, performs
 initialization and tool discovery, calls status against a loopback fake Core,
-and checks that sensitive and mutating tools are denied:
+reads environment content without admin credentials, and checks that mutations are denied:
 
 ```sh
 cargo test --locked -p komodo-server --test stdio
@@ -78,7 +80,7 @@ Core version. See [compatibility](compatibility.md).
 | The client cannot start the server | Use the absolute binary path and `--stdio`; check that the build completed and the file is executable. |
 | The server exits at startup | Confirm the child process receives all three required variables. A variable in a shell is not automatically present in a separately launched desktop client. |
 | `system.status` fails | Check Core reachability from the client process, the Core base URL, and the service user's read permissions. Never include credential values in a report. |
-| A tool is missing | Local stdio intentionally excludes writes and sensitive reads. Use the gateway profile for those tools. |
+| A tool is missing | Check the selected capability profile and upstream credentials. All reads are included; mutations require a mutating profile and a complete admin credential pair. |
 | Search finds no matching resources | Check the search text and the resources visible to the read identity. A successful connection does not grant access to every resource. |
 
 To stop, disconnect or disable the server in your MCP client; closing its input
@@ -92,7 +94,7 @@ newline. Malformed frames, duplicate pending request IDs, or more than 32
 pending requests close the connection. Partial frames survive normal task
 cancellation. Initialization and output each have a 30-second deadline.
 Upstream requests use `KOMODO_MCP_UPSTREAM_TIMEOUT_SECONDS` (default 20, range
-1–120 seconds); an unavailable read may retry once. No mutation is available.
+1–120 seconds); an unavailable read may retry once. The read-only profile has no mutations.
 
 EOF on stdin ends the process. stdout contains only protocol messages.
 Diagnostics are deliberately limited to static startup failures on stderr;

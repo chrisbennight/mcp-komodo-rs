@@ -5,7 +5,7 @@
   <img src="branding/assets/wordmark-light.svg" width="440" alt="mcp-komodo-rs">
 </picture>
 
-Start with [local status access](quickstart.md) to connect a stdio MCP client.
+Start with [local read-only access](quickstart.md) to connect a stdio MCP client.
 You need a Komodo installation and a read-only service user to inspect your
 resources. The quickstart also includes a protocol test with a loopback fake
 upstream when you want to try the binary without a deployment.
@@ -17,7 +17,7 @@ upstream when you want to try the binary without a deployment.
 
 | I want to… | Read |
 | --- | --- |
-| Connect a local client | [Status-only quickstart](quickstart.md) |
+| Connect a local client | [Read-only quickstart](quickstart.md) |
 | Enable authorized deployment and configuration tools | [Gateway deployment](gateway-setup.md) |
 | Configure credentials, timeouts, and ingress | [Configuration reference](configuration.md) |
 | Find tool names, inputs, limits, and sensitivity | [Tool surface](tool-surface.md) |

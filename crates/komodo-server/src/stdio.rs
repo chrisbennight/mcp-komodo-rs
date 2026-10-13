@@ -1,4 +1,4 @@
-//! Bounded newline-delimited MCP transport for a local status-only process.
+//! Bounded newline-delimited MCP transport for a local process.
 
 use std::{io, sync::Arc, time::Duration};
 

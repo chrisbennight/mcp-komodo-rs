@@ -7,38 +7,39 @@ Restart the process after changing configuration.
 
 ## Select a profile
 
-Start with `--stdio` for local status tools. This mode loads only the read key,
-read secret, upstream URL, and upstream timeout. It opens no listener and does
-not load admin credentials or gateway settings. The parent MCP client owns
-access to the process; see the [quickstart](quickstart.md).
+Start with `--stdio --tool-profile read-only` for local reads. This mode loads
+only the read key, read secret, upstream URL, and upstream timeout. It opens no
+listener and does not read admin credentials or gateway settings. The parent
+MCP client owns access to the process; see the [quickstart](quickstart.md).
 
 Starting without a mode flag selects the full HTTP gateway profile. All settings
 marked required below apply to that profile. Listener and gateway variables do
 not change stdio limits.
 
-| Capability | Local status-only stdio | Full HTTP gateway profile | Access boundary |
+| Capability | Local stdio | HTTP gateway | Access boundary |
 | --- | --- | --- | --- |
 | Ordinary status and search | Available | Available when admitted by the gateway | Restrict the read service user to the intended resources. |
-| Diagnostics, logs, configuration, Compose, environment, and commands | Excluded, including direct calls by name | Separately named sensitive reads | Gateway authorization must permit the specific sensitive capability. |
-| Custom webhook secret | Excluded | Governed secret read/write tools | Secret values and their source/presence metadata have different exposure rules. |
-| Deploy, restart, stop, build, cancel, and repository pull | Excluded | Named mutation tools | Gateway `komodo-admin` membership and applicable approval policy. |
-| Configuration, content, file, and webhook writes | Excluded | Typed partial intents | Administrative upstream identity, gateway authorization, and consequential-write approval. |
+| Diagnostics, logs, configuration, Compose, environment, and commands | Available with read credentials | Available with read credentials | The operator chooses disclosure and authorization policy outside this library. |
+| Literal credential values | Require a native file-transfer adapter | Native file-transfer capability | Passwords and tokens stay outside model context; source/presence metadata remains ordinary data. |
+| Deploy, restart, stop, build, cancel, and repository pull | Available in a mutating profile with an admin credential pair | Named mutation tools when admin credentials are supplied | Administrative upstream identity and operator authorization and approval policy. |
+| Configuration, content, file, and webhook writes | Available in the full profile with admin credentials; credential writes also require file transfer | Typed partial intents when admin credentials are supplied | Administrative upstream identity and operator authorization and approval policy. |
 
-HTTP defaults to the full catalog. Select a smaller process-wide catalog with
+Both transports default to the full capability profile. Select a smaller process-wide catalog with
 `--tool-profile status`, `--tool-profile read-only`, or `--tool-profile operations`:
 
-| HTTP tool profile | Included capabilities |
+| Tool profile | Included capabilities |
 | --- | --- |
-| `status` | Ordinary status/search and webhook-source metadata; no sensitive content or writes. |
-| `read-only` | All reads, including separately governed logs, configuration, and custom secrets. |
-| `operations` | Ordinary reads plus deploy, restart, stop, build, cancel, and repository pull. |
+| `status` | Compatibility alias for the complete read-only profile. |
+| `read-only` | All reads, including logs, configuration, and credential file-transfer operations. |
+| `operations` | All reads plus deploy, restart, stop, build, cancel, and repository pull. |
 | `full` | Every typed read, action, and configuration write. |
 
 Excluded tools are hidden from discovery and rejected when called directly.
 Profiles limit the whole process; they do not replace user authorization or
-approval policy. HTTP startup still requires the documented separate read/admin
-credentials for every profile. Local stdio always keeps its status-only boundary
-and cannot be combined with `--tool-profile`.
+approval policy. Read-only profiles never load administrative credentials.
+Other profiles load an optional admin credential pair: without it, every read
+remains available and all mutations are excluded. Supplying only one member of
+the pair is a configuration error. Stdio supports the same profile selection.
 HTTP always requires both the rotating gateway bearer and a verified identity
 JWT. A visible tool or an MCP annotation does not itself grant permission.
 For a configuration task, select the intended [write consequence](tool-surface.md#choose-the-intended-configuration-effect)
@@ -51,8 +52,8 @@ before changing values or deciding to deploy.
 | `KOMODO_MCP_UPSTREAM_URL` | `http://core:9120/` | Core base URL, with no path other than `/`, user information, query, or fragment |
 | `KOMODO_MCP_READ_API_KEY` | Required | Read service-user API key |
 | `KOMODO_MCP_READ_API_SECRET` | Required | Read service-user API secret |
-| `KOMODO_MCP_ADMIN_API_KEY` | Required in HTTP mode | Separate administrative service-user API key |
-| `KOMODO_MCP_ADMIN_API_SECRET` | Required in HTTP mode | Administrative service-user API secret |
+| `KOMODO_MCP_ADMIN_API_KEY` | Optional | Separate administrative service-user API key; used only for enabled mutations |
+| `KOMODO_MCP_ADMIN_API_SECRET` | Optional | Administrative API secret; supply both admin variables or neither |
 | `KOMODO_MCP_UPSTREAM_TIMEOUT_SECONDS` | `20` | Integer, 1–120 seconds per upstream request |
 
 Credential values must contain 1–16384 UTF-8 bytes and no CR or LF. They are
@@ -127,7 +128,7 @@ whether Komodo is healthy.
 
 Mode flags are mutually exclusive:
 
-- `--stdio` serves the local status profile over stdin/stdout. Frames are limited
+- `--stdio` serves the selected local profile over stdin/stdout. Frames are limited
   to 64 KiB, with at most 32 pending requests. Initialization and output each
   have a 30-second deadline. See [stdio limits](quickstart.md#limits-and-failures).
 - `--emit-tools-json` prints the full standard MCP `tools/list` catalog without
