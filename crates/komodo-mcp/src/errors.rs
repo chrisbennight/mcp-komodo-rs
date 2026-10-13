@@ -6,6 +6,39 @@ use serde_json::json;
 
 use super::{KomodoMcp, McpError};
 
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CredentialFailureData {
+    upstream: UpstreamDiagnostic,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_safe: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation_id_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reconcile_with: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operator_verification_required: Option<bool>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct UpstreamDiagnostic {
+    http_status: u16,
+    request: String,
+    diagnostic: Option<komodo_api::errors::Diagnostic>,
+    diagnostic_unavailable: Option<String>,
+    untrusted: bool,
+    credential_values_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_file: Option<super::files::FileValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_file_unavailable: Option<String>,
+}
+
 impl KomodoMcp {
     pub(super) fn api_error(&self, mut error: ApiError) -> McpError {
         let message = error.to_string();
@@ -14,7 +47,7 @@ impl KomodoMcp {
         };
         let mut data = json!({
             "upstream": {"httpStatus":failure.status, "request":failure.request,
-                "diagnostic":failure.diagnostic, "untrusted":true}
+                "diagnostic":failure.diagnostic, "diagnosticUnavailable":failure.diagnostic_unavailable, "untrusted":true}
         });
         if let Some(bytes) = failure.take_credential_document() {
             data["upstream"]["credentialValuesPresent"] = json!(true);
@@ -40,10 +73,7 @@ impl KomodoMcp {
         target: &str,
         read_tool: &'static str,
     ) -> McpError {
-        let uncertain = matches!(
-            &error,
-            ApiError::Unavailable | ApiError::IncompatibleResponse | ApiError::ResponseTooLarge
-        ) || matches!(&error, ApiError::Upstream(failure) if !matches!(failure.status, 401 | 403 | 404));
+        let uncertain = error.mutation_outcome_unknown();
         let mut result = self.api_error(error);
         if uncertain {
             result.message =
@@ -64,8 +94,7 @@ impl KomodoMcp {
     }
 
     pub(super) fn operation_lookup_error(&self, error: ApiError) -> McpError {
-        let missing = matches!(&error, ApiError::NotFound)
-            || matches!(&error, ApiError::Upstream(failure) if failure.status == 404);
+        let missing = error.resource_not_found();
         let mut result = self.api_error(error);
         if missing {
             result.code = ErrorCode::INVALID_PARAMS;

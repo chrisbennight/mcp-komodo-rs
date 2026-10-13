@@ -289,7 +289,12 @@ async fn exercise_credential_failure(
     )
     .await;
     assert!(!failure.to_string().contains(FAILED_TOKEN));
-    let detail = &failure["error"]["data"];
+    assert_eq!(failure["result"]["isError"], true);
+    assert_eq!(
+        failure["result"]["_meta"]["io.modelcontextprotocol/trust-annotations"]["untrusted"],
+        true
+    );
+    let detail = &failure["result"]["structuredContent"]["data"];
     assert_eq!(detail["outcome"], "unknown");
     assert_eq!(detail["retrySafe"], false);
     assert_eq!(detail["reconcileWith"], "stacks.webhook.secret.read");

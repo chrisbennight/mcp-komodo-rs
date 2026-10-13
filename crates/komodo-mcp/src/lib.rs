@@ -2201,7 +2201,7 @@ impl ServerHandler for KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         let mut invocation = self.clone();
         invocation.rpc_cancellation = Some(context.ct.clone());
-        if let Some(budget) = &invocation.budget {
+        let result = if let Some(budget) = &invocation.budget {
             budget.check()?;
             tokio::select! {
                 biased;
@@ -2215,6 +2215,26 @@ impl ServerHandler for KomodoMcp {
                 () = context.ct.cancelled() => Err(execution::ended()),
                 result = invocation.dispatch(&params) => result,
             }
+        };
+        match result {
+            Err(error)
+                if error
+                    .data
+                    .as_ref()
+                    .is_some_and(|data| data["upstream"]["credentialValuesPresent"] == true) =>
+            {
+                let mut result = structured(CredentialFailureOutput {
+                    code: error.code.0,
+                    message: error.message.to_string(),
+                    data: serde_json::from_value(
+                        error.data.expect("credential-bearing diagnostic data"),
+                    )
+                    .expect("fixed diagnostic and reconciliation fields"),
+                })?;
+                result.is_error = Some(true);
+                Ok(trust_annotated(result))
+            }
+            result => result,
         }
     }
 }
@@ -2275,13 +2295,20 @@ impl ToolSpec {
     }
 }
 
+#[derive(Serialize, JsonSchema)]
+struct CredentialFailureOutput {
+    code: i32,
+    message: String,
+    data: errors::CredentialFailureData,
+}
+
 fn tool<I: JsonSchema, O: JsonSchema>(spec: &ToolSpec) -> Tool {
     Tool::new(
         Cow::Borrowed(spec.name),
         Cow::Borrowed(spec.description),
         Arc::new(schema_object::<I>()),
     )
-    .with_raw_output_schema(Arc::new(schema_object::<O>()))
+    .with_raw_output_schema(Arc::new(tool_output_schema::<O>()))
     .with_annotations(
         ToolAnnotations::new()
             .read_only(spec.behavior.read_only)
@@ -2289,6 +2316,32 @@ fn tool<I: JsonSchema, O: JsonSchema>(spec: &ToolSpec) -> Tool {
             .idempotent(spec.behavior.idempotent)
             .open_world(spec.behavior.open_world),
     )
+}
+
+fn tool_output_schema<O: JsonSchema>() -> Map<String, Value> {
+    let mut success = schema_object::<O>();
+    let definitions = success.remove("$defs");
+    let mut failure = schema_object::<CredentialFailureOutput>();
+    let failure_definitions = failure.remove("$defs");
+    let mut schema = serde_json::json!({"type":"object", "anyOf":[success, failure]})
+        .as_object()
+        .expect("fixed schema object")
+        .clone();
+    let mut definitions = definitions.unwrap_or_else(|| serde_json::json!({}));
+    if let Some(Value::Object(failure_definitions)) = failure_definitions {
+        for (name, definition) in failure_definitions {
+            let old = definitions
+                .as_object_mut()
+                .expect("schema definitions object")
+                .insert(name, definition.clone());
+            assert!(
+                old.is_none_or(|old| old == definition),
+                "shared schema definitions must agree"
+            );
+        }
+    }
+    schema.insert("$defs".to_owned(), definitions);
+    schema
 }
 
 fn schema_object<T: JsonSchema>() -> Map<String, Value> {

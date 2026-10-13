@@ -86,6 +86,24 @@ pub enum ApiError {
     ResponseTooLarge,
 }
 
+impl ApiError {
+    /// Whether a submitted mutation needs reconciliation before another write.
+    #[must_use]
+    pub fn mutation_outcome_unknown(&self) -> bool {
+        matches!(
+            self,
+            Self::Unavailable | Self::IncompatibleResponse | Self::ResponseTooLarge
+        ) || matches!(self, Self::Upstream(failure) if !matches!(failure.status, 401 | 403 | 404))
+    }
+
+    /// Whether the upstream explicitly reported that the requested resource is absent.
+    #[must_use]
+    pub fn resource_not_found(&self) -> bool {
+        matches!(self, Self::NotFound)
+            || matches!(self, Self::Upstream(failure) if failure.status == 404)
+    }
+}
+
 /// Common resource metadata returned by list endpoints.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct ResourceListItem<I> {
@@ -735,8 +753,31 @@ impl Client {
 
         let status = response.status();
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| ApiError::Unavailable)? {
+        loop {
+            let chunk = match response.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) if !status.is_success() => {
+                    return Err(ApiError::Upstream(Box::new(
+                        errors::UpstreamFailure::without_body(
+                            status.as_u16(),
+                            variant,
+                            "response body interrupted",
+                        ),
+                    )));
+                }
+                Err(_) => return Err(ApiError::Unavailable),
+            };
             if bytes.len().saturating_add(chunk.len()) > MAXIMUM_RESPONSE_BYTES {
+                if !status.is_success() {
+                    return Err(ApiError::Upstream(Box::new(
+                        errors::UpstreamFailure::without_body(
+                            status.as_u16(),
+                            variant,
+                            "response body exceeds byte bound",
+                        ),
+                    )));
+                }
                 return Err(ApiError::ResponseTooLarge);
             }
             bytes.extend_from_slice(&chunk);
@@ -1800,8 +1841,8 @@ mod tests {
             assert_eq!(failure.status, status);
             assert_eq!(failure.request, "GetVersion");
             assert_eq!(
-                failure.diagnostic.as_ref().unwrap().error,
-                "SENTINEL_UPSTREAM_BODY"
+                serde_json::to_value(&failure.diagnostic.as_ref().unwrap().error).unwrap(),
+                json!("SENTINEL_UPSTREAM_BODY")
             );
             assert!(failure.take_credential_document().is_none());
         }
@@ -1836,6 +1877,28 @@ mod tests {
             ApiError::ResponseTooLarge
         );
 
+        for status in [401, 403, 404] {
+            let rejected = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(status).set_body_bytes(vec![
+                    b'x';
+                    MAXIMUM_RESPONSE_BYTES
+                        + 1
+                ]))
+                .expect(1)
+                .mount(&rejected)
+                .await;
+            let ApiError::Upstream(failure) = client(&rejected).version().await.unwrap_err() else {
+                panic!("typed failure")
+            };
+            assert_eq!(failure.status, status);
+            assert_eq!(failure.request, "GetVersion");
+            assert_eq!(
+                failure.diagnostic_unavailable,
+                Some("response body exceeds byte bound")
+            );
+        }
+
         let exact_bound = MockServer::start().await;
         let mut bounded_body = br#"{"version":"bounded"}"#.to_vec();
         bounded_body.resize(MAXIMUM_RESPONSE_BYTES, b' ');
@@ -1851,6 +1914,38 @@ mod tests {
                 .expect("bounded response"),
             "bounded"
         );
+    }
+
+    #[tokio::test]
+    async fn interrupted_failure_bodies_keep_received_status_and_request() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for status in [401, 403, 404] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                assert!(stream.read(&mut request).await.unwrap() > 0);
+                stream.write_all(format!("HTTP/1.1 {status} Rejected\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial").as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+            });
+            let client = Client::new(
+                Url::parse(&format!("http://{address}/")).unwrap(),
+                Credentials::new("read-key".into(), "read-secret".into()).unwrap(),
+                Duration::from_secs(2),
+            )
+            .unwrap();
+            let ApiError::Upstream(failure) = client.version().await.unwrap_err() else {
+                panic!("typed failure")
+            };
+            assert_eq!(failure.status, status);
+            assert_eq!(failure.request, "GetVersion");
+            assert_eq!(
+                failure.diagnostic_unavailable,
+                Some("response body interrupted")
+            );
+            server.await.unwrap();
+        }
     }
 
     #[test]
