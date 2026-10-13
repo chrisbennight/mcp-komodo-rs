@@ -39,6 +39,11 @@ environment, configuration, diagnostics, and logs with read credentials. The
 operator chooses access, disclosure, and approval policy.
 [See the tool reference](docs/tool-surface.md).
 
+**Check network addressing.** Use `servers.networks.search` for one server's
+network inventory and `servers.networks.read` for IPAM settings and attached
+endpoint addresses. Network addresses, options, and labels remain ordinary facts;
+the operator owns disclosure policy.
+
 ## Get started
 
 You need Linux, Git, a C compiler/linker, Rust installed through rustup, and an
@@ -118,7 +123,7 @@ Both transports can expose a smaller catalog with `--tool-profile status`, `read
 before choosing: every read-only profile includes content reads; literal credentials require native file transfer.
 
 The server exposes typed, bounded operations. It does not provide a raw Komodo
-API proxy, arbitrary shell access, or Docker inspection. Authorized sensitive
+API proxy, arbitrary shell access, or unrestricted container inspection. Authorized sensitive
 reads can return sensitive content to the caller. Komodo may retain submitted
 write content in its own traces; see the [tool contract](docs/tool-surface.md)
 for the disclosure and failure semantics.

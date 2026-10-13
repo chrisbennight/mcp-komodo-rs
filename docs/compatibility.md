@@ -7,6 +7,14 @@ Resource and operation metadata models also cover the fields defined by
 including server statistics and resource placement names. This source comparison
 and loopback evidence do not certify a live deployment.
 
+Network reads follow the documented Core 2.3 request rename:
+[`ListNetworks` and `InspectNetwork`](https://github.com/moghtech/komodo/blob/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/client/core/rs/src/api/read/docker.rs).
+Core releases before 2.3 use `ListDockerNetworks` and `InspectDockerNetwork`.
+The adapter selects the named request after reading Core's version; an
+unparseable version fails explicitly. Loopback tests verify both release forms
+and the fields in the
+[Core 2.3.3 network model](https://github.com/moghtech/komodo/blob/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/client/core/rs/src/entities/docker/network.rs).
+
 The client sends the documented envelope form to `/read`, `/write`, and
 `/execute`, using the request variant in `type` and typed arguments in `params`.
 Reads and typed writes (`UpdateStack`, `WriteStackFileContents`) go to `/read`
@@ -49,6 +57,7 @@ and checks status and content reads without admin credentials and excluded mutat
 | --- | --- | --- |
 | Komodo Core | 2.1.2 request/response shapes | Loopback wire tests; no live deployment certification |
 | Resource and operation metadata | 2.1.2 and 2.3.3 list/detail fields | Version-pinned source comparison and loopback metadata regressions |
+| Network reads | Versioned 2.1.2 and 2.3.3 named requests and typed addressing facts | Loopback wire tests and MCP discovery, detail, and pagination regressions |
 | MCP | 2025-11-25 | Pinned rmcp SDK and binary stdio integration test |
 | HTTP access | Gateway bearer plus verified identity JWT | Production-router status call with loopback JWKS/Core and rejected bearer/JWT tests |
 | Local access | Selected stdio capability profile, process-owner trust | Binary initialization, discovery, content read and mutation denial tests |
