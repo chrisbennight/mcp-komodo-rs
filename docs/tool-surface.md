@@ -2,8 +2,10 @@
 
 For uncertain write results, use the
 [operation-specific reconciliation guide](reconciliation.md). Metadata exports
-describe the tools; gateway authorization and sensitive-read approvals remain
-separate requirements.
+describe the tools; operators configure gateway authorization, disclosure,
+and approval policy separately. The [architectural decisions](../DECISIONS.md)
+define ownership. Sensitivity and review labels described below reflect the
+current implementation being refactored; they are not library policy mandates.
 
 For smaller catalogs, on-demand schemas, and compatible result presentation, see
 [discovery efficiency](discovery-efficiency.md).
@@ -213,19 +215,20 @@ actions, or generic resource objects. The result is a minimal receipt suitable
 for later reconciliation and never echoes sensitive input.
 
 Annotations are assigned from each operation's behavior instead of treating
-every mutation as destructive and non-idempotent. The gateway catalog owns
-risk and authorization; every mutation continues to require `komodo-admin`.
-Gateway deployment policy must enforce interactive, argument-bound approval
-for tools whose metadata requests review. Verify that effective policy before
-enabling these tools; metadata alone does not enforce approval.
+every mutation as destructive and non-idempotent. Operators own risk,
+authorization, disclosure, roles, and approval policy in their gateway. The
+current catalog includes review requests; they describe existing metadata and
+do not prescribe the operator's policy. Verify the deployment's chosen policy
+before enabling tools; metadata alone does not grant access or enforce approval.
 
 Mutation calls are never retried automatically. A transport failure does not
 prove that Komodo rejected the request.
 
 `stacks.stop` stops all services of an existing stack selected by exact name or
 id, preserving its containers. It uses Komodo's default termination timeout
-and returns an operation receipt. It requires `komodo-admin` and requests
-interactive review because stopping services interrupts availability. Repeated
+and returns an operation receipt. Its current metadata requests review because
+stopping services interrupts availability; operators decide applicable roles
+and approvals outside the library. Repeated
 stops have an idempotent stopping effect, but calls are never retried; reconcile
 an ambiguous outcome through `operations.search` and `operations.status` before
 deciding whether to submit another operation.
@@ -297,11 +300,12 @@ annotation-native scaffold (`classification_mode: mcp_annotations`, gateway-owne
 the per-tool behavior hash the gateway observes from the live server. Risk
 remains gateway-owned rather than moving into MCP annotations.
 
-## Hard exclusions
+## Current implementation coverage
 
 There are no tools for Docker or Swarm inspection, container or server
 terminals, unrestricted shell execution, arbitrary actions or procedures,
 providers, credential stores, permissions, onboarding keys, ResourceSync
-apply, raw API forwarding, or generic resource create/update/delete. Sensitive
-configuration and logs are governed capabilities, not members of this
-exclusion list.
+apply, raw API forwarding, or generic resource create/update/delete. This is
+the current coverage, not a prohibition on additional named typed capabilities.
+Configuration and logs are existing capabilities. Missing functionality is a
+coverage question; presumed sensitivity does not establish an architectural ban.

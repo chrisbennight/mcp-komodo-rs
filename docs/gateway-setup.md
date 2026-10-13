@@ -56,10 +56,10 @@ deployment, then follow your gateway's admission procedure. Do not maintain a
 separate hand-edited copy of the Rust tool classifications.
 
 The scaffold uses the gateway's `low`, `medium`, and `high` risk vocabulary.
-Consequential configuration, content, command, and secret writes use `high`,
-its highest supported level. Their sensitivity and review requirements remain
-separate behavior claims; a risk label alone is not an authorization or an
-approval policy.
+The current scaffold assigns `high` to configuration, content, command, and
+secret writes. These are existing source-generated defaults, not required
+operator policy. Operators choose risk, disclosure, roles, and approvals for
+their deployment; a risk label alone is not authorization or approval policy.
 
 Before publishing, compare the complete generated tool-name set with the live
 upstream and gateway catalog. Inspect every missing tool, changed schema, and
@@ -75,13 +75,15 @@ does not describe a restricted deployment. The gateway still applies user policy
 and approvals to every tool admitted by the selected profile.
 
 Neither export contains an authorization or approval policy. You must configure
-that policy in the gateway. Permit ordinary status reads only for authenticated
-users, require `komodo-admin` for mutations, and separately govern sensitive
-reads and approval requirements. Enforce a deny rule for unauthorized writes
-even if another policy grants broad administrator access. Standard MCP
+that policy in the gateway according to the operator's intended access,
+disclosure, roles, and approval rules. The library does not prescribe a local
+group name or a universal approval requirement. Standard MCP
 annotations and experimental metadata describe behavior; they grant no
 permissions. The server verifies gateway identity but does not implement these
-per-user policy decisions itself.
+per-user policy decisions itself. See [the architectural decisions](../DECISIONS.md)
+for the ownership boundary. Current export and validation behavior is described
+below; it does not make source-generated risk or sensitivity judgments an
+architectural requirement, and that behavior is part of the ongoing refactor.
 
 ## Verify the connection
 
