@@ -32,7 +32,7 @@ struct UpstreamDiagnostic {
     diagnostic: Option<komodo_api::errors::Diagnostic>,
     diagnostic_unavailable: Option<String>,
     untrusted: bool,
-    credential_values_present: bool,
+    credential_values_present: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     diagnostic_file: Option<super::files::FileValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,10 +47,10 @@ impl KomodoMcp {
         };
         let mut data = json!({
             "upstream": {"httpStatus":failure.status, "request":failure.request,
-                "diagnostic":failure.diagnostic, "diagnosticUnavailable":failure.diagnostic_unavailable, "untrusted":true}
+                "diagnostic":failure.diagnostic, "diagnosticUnavailable":failure.diagnostic_unavailable,
+                "credentialValuesPresent":failure.credential_values_present, "untrusted":true}
         });
         if let Some(bytes) = failure.take_credential_document() {
-            data["upstream"]["credentialValuesPresent"] = json!(true);
             if let Some((owner, files)) = &self.credential_files {
                 match files.publish(owner, "komodo-diagnostic.txt", "text/plain", bytes) {
                     Ok(file) => data["upstream"]["diagnosticFile"] = json!(file),

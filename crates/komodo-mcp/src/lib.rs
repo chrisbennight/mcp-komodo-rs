@@ -2218,10 +2218,10 @@ impl ServerHandler for KomodoMcp {
         };
         match result {
             Err(error)
-                if error
-                    .data
-                    .as_ref()
-                    .is_some_and(|data| data["upstream"]["credentialValuesPresent"] == true) =>
+                if error.data.as_ref().is_some_and(|data| {
+                    data["upstream"].get("diagnosticFile").is_some()
+                        || data["upstream"].get("diagnosticFileUnavailable").is_some()
+                }) =>
             {
                 let mut result = structured(CredentialFailureOutput {
                     code: error.code.0,
