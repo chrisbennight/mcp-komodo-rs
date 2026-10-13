@@ -34,8 +34,12 @@ acknowledgments; callers use the corresponding typed read to observe state.
 Operation search and status preserve the resource target's type and id from
 Core's tagged `ResourceTarget`, including future resource kinds. They also retain
 initiating identity, version, commit, and operation-specific data when reported.
-The API adapter retains configuration-history documents for the credential
-transfer work; MCP document delivery is still pending. Core 2.1.2
+History documents remain available through operation search and status. Their
+typed credential fields follow the Core 2.3.3
+[resource models](https://github.com/moghtech/komodo/tree/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/client/core/rs/src/entities).
+Core's [TOML export](https://github.com/moghtech/komodo/blob/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/bin/core/src/api/read/toml.rs)
+retains these literal values, so their exact originals use native file transfer.
+Ordinary documents remain inline without a speculative content scan. Core 2.1.2
 reports `Queued`, `InProgress`, and `Complete` update states. The MCP `outcome`
 distinguishes pending from completed results, and `success` is now nullable until
 completion. Consumers that assumed a boolean for pending operations must use

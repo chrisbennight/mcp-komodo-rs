@@ -19,6 +19,12 @@ const CLIENT: &str = "synthetic-client-log-sentinel";
 const URI_MARKER: &str = "synthetic-uri-log-sentinel";
 const TOKEN: &str = "synthetic-webhook-token-sentinel";
 
+fn history_toml() -> String {
+    format!(
+        "[[stack]]\nname = \"ordinary-history-stack\"\n[stack.config]\nwebhook_secret = \"{TOKEN}\"\nenvironment = \"password=ordinary-text\"\nproject_name = \"10.20.0.1\"\n"
+    )
+}
+
 fn capture(reader: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> JoinHandle<Vec<u8>> {
     tokio::spawn(async move {
         let mut output = Vec::new();
@@ -53,6 +59,12 @@ async fn fake_upstream() -> (MockServer, String) {
             json!({"config":{"environment":CONTENT,"webhook_secret":TOKEN}}),
         ),
         ("UpdateStack", json!({"config":{"environment":WRITE}})),
+        (
+            "GetUpdate",
+            json!({"_id":{"$oid":"history-document"},"operation":"UpdateStack",
+            "start_ts":1,"status":"Complete","success":true,"prev_toml":"[[stack]]\nname = \"before\"\n",
+            "current_toml":history_toml()}),
+        ),
     ] {
         Mock::given(method("POST"))
             .and(body_partial_json(json!({"type":kind})))
@@ -221,7 +233,70 @@ async fn exercise_files(client: &reqwest::Client, url: &str, identity: &str) -> 
         .unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(response.text().await.unwrap(), TOKEN);
-    vec![grant.to_owned(), download_grant.to_owned()]
+    vec![
+        grant.to_owned(),
+        download_grant.to_owned(),
+        exercise_history_files(client, url, identity, meta).await,
+    ]
+}
+
+async fn exercise_history_files(
+    client: &reqwest::Client,
+    url: &str,
+    identity: &str,
+    meta: Value,
+) -> String {
+    let history = request(
+        client,
+        url,
+        identity,
+        "tools/call",
+        json!({
+        "name":"operations.status", "arguments":{"operation_id":"history-document"}
+        }),
+    )
+    .await;
+    assert!(!history.to_string().contains(TOKEN));
+    assert!(history.get("error").is_none(), "{history}");
+    let status = &history["result"]["structuredContent"];
+    assert_eq!(
+        status["previousConfiguration"]["toml"],
+        "[[stack]]\nname = \"before\"\n"
+    );
+    let current = &status["currentConfiguration"];
+    assert!(
+        current["toml"]
+            .as_str()
+            .unwrap()
+            .contains("password=ordinary-text")
+    );
+    assert!(current["toml"].as_str().unwrap().contains("10.20.0.1"));
+    assert_eq!(
+        current["credentialFields"],
+        json!(["stack[0].config.webhook_secret"])
+    );
+    let download = request(
+        client,
+        url,
+        identity,
+        "files/authorizeDownload",
+        json!({
+            "_meta":meta,"uri":current["originalFile"]["uri"]
+        }),
+    )
+    .await;
+    let grant = download["result"]["download"]["headers"]["Authorization"]
+        .as_str()
+        .unwrap();
+    let response = client
+        .get(download["result"]["download"]["url"].as_str().unwrap())
+        .header("authorization", grant)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), history_toml());
+    grant.to_owned()
 }
 
 fn assert_diagnostics(bytes: &[u8], filter: &str, identity: &str) {

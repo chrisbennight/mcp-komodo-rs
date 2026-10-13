@@ -150,11 +150,14 @@ remain open strings so new Core resource kinds retain their correlation. Command
 logs remain available through `operations.logs.read`. These named projections
 are semantic contracts, not disclosure policy.
 
-Configuration history delivery is being completed with the literal credential
-transfer capability: Core exports configured webhook tokens into history TOML.
-Ordinary documents must remain available, and actual credential values must
-cross outside model context. The current history response does not yet provide
-these documents.
+Operation search and status expose `previousConfiguration` and
+`currentConfiguration` when Core supplies history. Each includes ordinary `toml`,
+explicit `credentialFields`, and native `originalFile` metadata when literal
+credentials occur. Ordinary documents remain exact inline text. Credential-bearing
+documents retain ordinary facts inline and their exact original through native
+file transfer. Missing native support or capacity is reported explicitly without
+removing operation metadata or ordinary configuration. See
+[history credential fields](file-transfers.md#configuration-history).
 
 Content reads expose typed configuration and content under the bounded upstream
 response limit. `stacks.config.read` retains its summary and adds `configuration`
