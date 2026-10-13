@@ -3247,12 +3247,12 @@ mod tests {
                         public_ip: Some("192.0.2.15".into()),
                         public_key: Some("public-key-fixture".into()),
                         attempted_public_key: Some("attempted-public-key-fixture".into()),
-                        region: "east".into(),
-                        send_cpu_alerts: true,
+                        region: Some("east".into()),
+                        send_cpu_alerts: Some(true),
                         ..Default::default()
                     },
-                    template: true,
-                    tags: vec!["tag-production".into()],
+                    template: Some(true),
+                    tags: Some(vec!["tag-production".into()]),
                 }])
             })
         }
@@ -3272,11 +3272,11 @@ mod tests {
                         name: "gateway".into(),
                         info: StackInfo {
                             state: "Running".into(),
-                            server_id: "server-1".into(),
-                            server_name: "mini".into(),
-                            repo_link: "https://git.example.test/operator/services".into(),
-                            branch: "main".into(),
-                            linked_repo: "repo-1".into(),
+                            server_id: Some("server-1".into()),
+                            server_name: Some("mini".into()),
+                            repo_link: Some("https://git.example.test/operator/services".into()),
+                            branch: Some("main".into()),
+                            linked_repo: Some("repo-1".into()),
                             status: Some("running(2)".into()),
                             services: vec![
                                 StackService {
@@ -3296,8 +3296,8 @@ mod tests {
                             latest_hash: Some("abc123".into()),
                             ..Default::default()
                         },
-                        template: false,
-                        tags: Vec::new(),
+                        template: Some(false),
+                        tags: Some(Vec::new()),
                     },
                     ResourceListItem {
                         id: "stack-2".into(),
@@ -3313,8 +3313,8 @@ mod tests {
                             latest_hash: None,
                             ..Default::default()
                         },
-                        template: false,
-                        tags: Vec::new(),
+                        template: Some(false),
+                        tags: Some(Vec::new()),
                     },
                 ])
             })
@@ -3329,15 +3329,15 @@ mod tests {
                     name: "worker".into(),
                     info: DeploymentInfo {
                         state: "Not_Deployed".into(),
-                        custom_name: "worker-container".into(),
-                        image: "registry.example.test/worker:2".into(),
-                        server_id: "server-1".into(),
+                        custom_name: Some("worker-container".into()),
+                        image: Some("registry.example.test/worker:2".into()),
+                        server_id: Some("server-1".into()),
                         build_id: Some("build-1".into()),
                         update_available: true,
                         ..Default::default()
                     },
-                    template: false,
-                    tags: Vec::new(),
+                    template: Some(false),
+                    tags: Some(Vec::new()),
                 }])
             })
         }
@@ -3351,15 +3351,15 @@ mod tests {
                     name: "image".into(),
                     info: BuildInfo {
                         state: "Building".into(),
-                        builder_id: "builder-1".into(),
-                        repo_link: "https://git.example.test/operator/build".into(),
+                        builder_id: Some("builder-1".into()),
+                        repo_link: Some("https://git.example.test/operator/build".into()),
                         built_hash: Some("build-commit".into()),
                         image_registry_domain: Some("registry.example.test".into()),
                         last_built_at: 11,
                         ..Default::default()
                     },
-                    template: false,
-                    tags: Vec::new(),
+                    template: Some(false),
+                    tags: Some(Vec::new()),
                 }])
             })
         }
@@ -3373,8 +3373,8 @@ mod tests {
                     name: "source".into(),
                     info: RepoInfo {
                         state: "Pulling".into(),
-                        repo_link: "https://git.example.test/operator/services".into(),
-                        branch: "main".into(),
+                        repo_link: Some("https://git.example.test/operator/services".into()),
+                        branch: Some("main".into()),
                         cloned_hash: Some("cloned-commit".into()),
                         cloned_message: Some("Restore the service".into()),
                         built_hash: Some("built-commit".into()),
@@ -3383,8 +3383,8 @@ mod tests {
                         last_built_at: 13,
                         ..Default::default()
                     },
-                    template: false,
-                    tags: Vec::new(),
+                    template: Some(false),
+                    tags: Some(Vec::new()),
                 }])
             })
         }
@@ -3676,8 +3676,8 @@ mod tests {
             resource_type: "Test".into(),
             name: name.into(),
             info,
-            template: false,
-            tags: Vec::new(),
+            template: Some(false),
+            tags: Some(Vec::new()),
         }
     }
 
@@ -4904,8 +4904,8 @@ mod tests {
                 resource_type: "Test".into(),
                 info: (),
 
-                template: false,
-                tags: Vec::new(),
+                template: Some(false),
+                tags: Some(Vec::new()),
             })
             .collect::<Vec<_>>();
         let page = search(
@@ -5005,8 +5005,8 @@ mod tests {
                 name: name.into(),
                 info: (),
 
-                template: false,
-                tags: Vec::new(),
+                template: Some(false),
+                tags: Some(Vec::new()),
             }
         }
         fn name(item: ResourceListItem<()>) -> String {

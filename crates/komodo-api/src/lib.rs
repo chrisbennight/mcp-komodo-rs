@@ -86,18 +86,14 @@ pub struct ResourceListItem<I> {
     pub resource_type: String,
     pub name: String,
     #[serde(default)]
-    pub template: bool,
+    pub template: Option<bool>,
     #[serde(default)]
-    pub tags: Vec<String>,
+    pub tags: Option<Vec<String>>,
     pub info: I,
 }
 
 /// Server list facts reported by Core. Public keys and addresses are metadata.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "Core reports independent alert and terminal flags."
-)]
 pub struct ServerInfo {
     pub state: String,
     pub version: Option<String>,
@@ -112,7 +108,7 @@ pub struct ServerInfo {
     #[serde(default)]
     pub logical_core_count: Option<u32>,
     #[serde(default)]
-    pub region: String,
+    pub region: Option<String>,
     #[serde(default)]
     pub address: Option<String>,
     #[serde(default)]
@@ -124,19 +120,19 @@ pub struct ServerInfo {
     #[serde(default)]
     pub attempted_public_key: Option<String>,
     #[serde(default)]
-    pub send_unreachable_alerts: bool,
+    pub send_unreachable_alerts: Option<bool>,
     #[serde(default)]
-    pub send_cpu_alerts: bool,
+    pub send_cpu_alerts: Option<bool>,
     #[serde(default)]
-    pub send_mem_alerts: bool,
+    pub send_mem_alerts: Option<bool>,
     #[serde(default)]
-    pub send_disk_alerts: bool,
+    pub send_disk_alerts: Option<bool>,
     #[serde(default)]
-    pub send_version_mismatch_alerts: bool,
+    pub send_version_mismatch_alerts: Option<bool>,
     #[serde(default)]
-    pub terminals_disabled: bool,
+    pub terminals_disabled: Option<bool>,
     #[serde(default)]
-    pub container_terminals_disabled: bool,
+    pub container_terminals_disabled: Option<bool>,
 }
 
 /// Core's structured diagnostic, retained as data rather than executable text.
@@ -189,38 +185,34 @@ pub struct LoadAverage {
 
 /// Stack list facts, including source and deployment provenance.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "These independent flags preserve Core's stack list contract."
-)]
 pub struct StackInfo {
     pub state: String,
     #[serde(default)]
-    pub swarm_id: String,
+    pub swarm_id: Option<String>,
     #[serde(default)]
-    pub swarm_name: String,
+    pub swarm_name: Option<String>,
     #[serde(default)]
-    pub server_id: String,
+    pub server_id: Option<String>,
     #[serde(default)]
-    pub server_name: String,
+    pub server_name: Option<String>,
     #[serde(default)]
-    pub files_on_host: bool,
+    pub files_on_host: Option<bool>,
     #[serde(default)]
-    pub file_contents: bool,
+    pub file_contents: Option<bool>,
     #[serde(default)]
-    pub linked_repo: String,
+    pub linked_repo: Option<String>,
     #[serde(default)]
-    pub linked_repo_name: String,
+    pub linked_repo_name: Option<String>,
     #[serde(default)]
-    pub git_provider: String,
+    pub git_provider: Option<String>,
     #[serde(default)]
-    pub repo: String,
+    pub repo: Option<String>,
     #[serde(default)]
-    pub branch: String,
+    pub branch: Option<String>,
     #[serde(default)]
-    pub repo_link: String,
+    pub repo_link: Option<String>,
     #[serde(default)]
-    pub auto_update_all_services: bool,
+    pub auto_update_all_services: Option<bool>,
     /// Short status text Komodo relays from Docker, when present.
     #[serde(default)]
     pub status: Option<String>,
@@ -257,17 +249,17 @@ pub struct DeploymentInfo {
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
-    pub custom_name: String,
+    pub custom_name: Option<String>,
     #[serde(default)]
-    pub image: String,
+    pub image: Option<String>,
     #[serde(default)]
-    pub swarm_id: String,
+    pub swarm_id: Option<String>,
     #[serde(default)]
-    pub swarm_name: String,
+    pub swarm_name: Option<String>,
     #[serde(default)]
-    pub server_id: String,
+    pub server_id: Option<String>,
     #[serde(default)]
-    pub server_name: String,
+    pub server_name: Option<String>,
     #[serde(default)]
     pub build_id: Option<String>,
     #[serde(default)]
@@ -281,23 +273,23 @@ pub struct BuildInfo {
     #[serde(default)]
     pub version: Option<ResourceVersion>,
     #[serde(default)]
-    pub builder_id: String,
+    pub builder_id: Option<String>,
     #[serde(default)]
-    pub files_on_host: bool,
+    pub files_on_host: Option<bool>,
     #[serde(default)]
-    pub dockerfile_contents: bool,
+    pub dockerfile_contents: Option<bool>,
     #[serde(default)]
-    pub linked_repo: String,
+    pub linked_repo: Option<String>,
     #[serde(default)]
-    pub linked_repo_name: String,
+    pub linked_repo_name: Option<String>,
     #[serde(default)]
-    pub git_provider: String,
+    pub git_provider: Option<String>,
     #[serde(default)]
-    pub repo: String,
+    pub repo: Option<String>,
     #[serde(default)]
-    pub branch: String,
+    pub branch: Option<String>,
     #[serde(default)]
-    pub repo_link: String,
+    pub repo_link: Option<String>,
     #[serde(default)]
     pub built_hash: Option<String>,
     #[serde(default)]
@@ -313,19 +305,19 @@ pub struct BuildInfo {
 pub struct RepoInfo {
     pub state: String,
     #[serde(default)]
-    pub server_id: String,
+    pub server_id: Option<String>,
     #[serde(default)]
-    pub server_name: String,
+    pub server_name: Option<String>,
     #[serde(default)]
-    pub builder_id: String,
+    pub builder_id: Option<String>,
     #[serde(default)]
-    pub git_provider: String,
+    pub git_provider: Option<String>,
     #[serde(default)]
-    pub repo: String,
+    pub repo: Option<String>,
     #[serde(default)]
-    pub branch: String,
+    pub branch: Option<String>,
     #[serde(default)]
-    pub repo_link: String,
+    pub repo_link: Option<String>,
     #[serde(default)]
     pub cloned_hash: Option<String>,
     #[serde(default)]
@@ -955,6 +947,57 @@ mod tests {
         })
     }
 
+    #[test]
+    fn new_resource_facts_distinguish_omission_from_reported_empty_values() {
+        use super::{BuildInfo, DeploymentInfo, RepoInfo, ResourceListItem, ServerInfo, StackInfo};
+        fn check<T: serde::de::DeserializeOwned + serde::Serialize>(facts: &serde_json::Value) {
+            let absent: T = serde_json::from_value(json!({"state":"Unknown"})).unwrap();
+            let absent = serde_json::to_value(absent).unwrap();
+            let mut reported = facts.clone();
+            reported["state"] = json!("Unknown");
+            let reported: T = serde_json::from_value(reported).unwrap();
+            let reported = serde_json::to_value(reported).unwrap();
+            for (name, value) in facts.as_object().unwrap() {
+                assert!(
+                    absent[name].is_null(),
+                    "{name} must preserve upstream omission"
+                );
+                assert_eq!(
+                    &reported[name], value,
+                    "{name} must preserve reported values"
+                );
+            }
+        }
+        check::<ServerInfo>(&json!({"region":"", "send_unreachable_alerts":false,
+            "send_cpu_alerts":false,"send_mem_alerts":false,"send_disk_alerts":false,
+            "send_version_mismatch_alerts":false,"terminals_disabled":false,
+            "container_terminals_disabled":false}));
+        check::<StackInfo>(&json!({"swarm_id":"","swarm_name":"","server_id":"",
+            "server_name":"","files_on_host":false,"file_contents":false,
+            "linked_repo":"","linked_repo_name":"","git_provider":"","repo":"",
+            "branch":"","repo_link":"","auto_update_all_services":false}));
+        check::<DeploymentInfo>(&json!({"custom_name":"","image":"","swarm_id":"",
+            "swarm_name":"","server_id":"","server_name":""}));
+        check::<BuildInfo>(&json!({"builder_id":"","files_on_host":false,
+            "dockerfile_contents":false,"linked_repo":"","linked_repo_name":"",
+            "git_provider":"","repo":"","branch":"","repo_link":""}));
+        check::<RepoInfo>(&json!({"server_id":"","server_name":"","builder_id":"",
+            "git_provider":"","repo":"","branch":"","repo_link":""}));
+        let absent: ResourceListItem<ServerInfo> = serde_json::from_value(json!({
+            "id":"s","name":"server","type":"Server","info":{"state":"Unknown"}
+        }))
+        .unwrap();
+        assert_eq!(absent.template, None);
+        assert_eq!(absent.tags, None);
+        let reported: ResourceListItem<ServerInfo> = serde_json::from_value(json!({
+            "id":"s","name":"server","type":"Server","template":false,"tags":[],
+            "info":{"state":"Unknown"}
+        }))
+        .unwrap();
+        assert_eq!(reported.template, Some(false));
+        assert_eq!(reported.tags, Some(Vec::new()));
+    }
+
     #[tokio::test]
     async fn list_servers_preserves_addresses_public_keys_and_resource_metadata() {
         let server = MockServer::start().await;
@@ -1034,9 +1077,12 @@ mod tests {
             target.info.public_key.as_deref(),
             Some("SENTINEL_PUBLIC_KEY")
         );
-        assert_eq!(target.info.region, "east");
-        assert!(target.template);
-        assert_eq!(target.tags, ["tag-production", "tag-east"]);
+        assert_eq!(target.info.region.as_deref(), Some("east"));
+        assert_eq!(target.template, Some(true));
+        assert_eq!(
+            target.tags.as_ref().unwrap(),
+            &["tag-production", "tag-east"]
+        );
         assert_eq!(target.info.core_count, Some(4));
         assert_eq!(target.info.logical_core_count, Some(8));
         let stats = target.info.stats.as_ref().expect("Core statistics");
