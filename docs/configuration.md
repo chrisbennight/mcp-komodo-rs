@@ -138,8 +138,9 @@ Mode flags are mutually exclusive:
   and standard MCP annotations for the [deployment validator](gateway-setup.md#validate-deployed-catalog-coverage-and-declarations), without runtime credentials.
 - `--emit-gateway-manifest` prints a gateway-specific connection and tool-name
   scaffold without runtime credentials; `--tool-profile` selects the same subset
-  as HTTP discovery. It contains no authorization or approval
-  policy and needs operator risk choices and gateway-computed behavior hashes before publication; see
+  as HTTP discovery. It leaves classification authority, authorization, and
+  approval policy to the operator. Supply the deployment's policy and complete
+  the selected gateway mode's contract review before publication; see
   [gateway deployment](gateway-setup.md#configure-the-gateway-and-server).
 - `--healthcheck` loads only host and port, performs a local `/healthz` request
   with a two-second deadline, and exits. It does not authenticate to the gateway

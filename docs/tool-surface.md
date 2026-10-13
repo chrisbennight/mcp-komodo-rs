@@ -345,8 +345,10 @@ claims. Result-level `io.modelcontextprotocol/trust-annotations` reports
 disclosure or authorization rule.
 
 `--emit-gateway-manifest` produces an incomplete connection and tool-name
-scaffold. The operator supplies risk and gateway-observed behavior hashes and
-chooses disclosure, roles, and approvals outside this repository.
+scaffold. The operator chooses classification authority, risk, disclosure,
+roles, and approvals outside this repository and completes the selected
+gateway mode's contract review. Explicit approved behavior hashes are supplied
+where that mode requires them.
 `--emit-gateway-contract-json` preserves standard MCP declarations for
 [deployment drift checks](gateway-setup.md#validate-deployed-catalog-coverage-and-declarations).
 Those checks compare source-owned schemas, descriptions, and factual behavior;
