@@ -76,10 +76,10 @@ Komodo's partial `UpdateStack` (or `WriteStackFileContents`) — no read-modify-
 write and no arbitrary JSON — validate their complete bounded input before the
 upstream call, and are never retried. They return the target, the applied field
 names, and any reconciliation id, never the submitted contents or secret. Writes
-that accept paths, content, or the webhook secret classify their input sensitive
-and use `high`, the gateway's highest supported risk level, in the manifest
-scaffold; `stacks.webhook.update` toggles only flags, so its input is operational
-and its risk is also `high`. Komodo may retain a
+that accept paths, content, or the webhook secret still classify their input
+sensitive in legacy MCP metadata; `stacks.webhook.update` toggles only flags and
+declares operational input. Risk is chosen by the operator outside the library.
+Komodo may retain a
 submitted payload in its own traces; that is disclosed at the approval boundary
 while MCP and gateway storage remain payload-free.
 
@@ -263,8 +263,8 @@ one file through `WriteStackFileContents`. They never perform a full-resource
 read-modify-write cycle, send only the fields they set, validate their complete
 bounded input before the upstream call, and return the target, applied field
 names, and any reconciliation id — never the submitted contents or secret.
-Content, command, secret, structural, and webhook-flag writes use `high` in the
-gateway manifest scaffold. Each write's input sensitivity is declared through action-metadata, and
+The gateway manifest scaffold contains no risk choices. Each write's legacy
+input sensitivity is declared through action-metadata, and
 only `stacks.file.write` labels its result sensitive because it echoes a path. Same-field concurrent updates are last-writer-wins when Komodo
 offers no revision precondition. Komodo may retain submitted configuration,
 content, commands, or secret values in its own traces or operation history;
@@ -310,14 +310,16 @@ The gateway treats annotations as claims, incorporates them into tool
 identity and drift checks, and applies catalog-owned risk, release, and
 authorization policy.
 
-The Komodo `side_effects` and `pii` classification is no longer projected into
-the gateway manifest. The sidecar's registry drives the MCP annotations —
-behavior hints replace `side_effects`, and result-level sensitivity and trust
-labels replace `pii` — and `--emit-gateway-manifest` now renders an
-annotation-native scaffold (`classification_mode: mcp_annotations`, gateway-owned
-`risk` only, no per-tool `side_effects`/`pii`) that an operator completes with
-the per-tool behavior hash the gateway observes from the live server. Risk
-remains gateway-owned rather than moving into MCP annotations.
+`--emit-gateway-manifest` produces an incomplete connection and tool-name
+scaffold. It assigns no risk, sensitivity, roles, or approval requirements.
+The operator supplies risk and gateway-observed behavior hashes and chooses
+disclosure, roles, and approvals outside this repository.
+`--emit-gateway-contract-json` preserves standard MCP declarations and omits
+nonstandard action metadata for
+[deployment drift checks](gateway-setup.md#validate-deployed-catalog-coverage-and-declarations).
+Those checks compare schemas, descriptions, and factual behavior independently
+of operator policy. Legacy sensitivity and review claims remain in the MCP
+catalog pending the rest of the refactor; they are not imported policy floors.
 
 ## Current implementation coverage
 

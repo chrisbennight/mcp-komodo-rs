@@ -8,19 +8,11 @@ mod lifecycle;
 pub mod server;
 pub mod stdio;
 
-use komodo_mcp::{KomodoMcp, TOOL_REGISTRY, ToolProfile};
+use komodo_mcp::{KomodoMcp, ToolProfile};
 
-/// Render an annotation-native gateway manifest scaffold from the executable
-/// tool registry.
-///
-/// The upstream is classified in `mcp_annotations` mode, so the sidecar's MCP
-/// annotations are the sole source of `side_effects` and sensitivity; this
-/// projection carries only the gateway-owned `risk` and never the legacy
-/// per-tool `side_effects`/`pii` flags, which annotation-mode admission
-/// rejects. It is a scaffold, not a publishable manifest: annotation admission
-/// also requires an `approved_behavior_hash` per tool that only the gateway can
-/// compute from the live server, so each must be filled from the gateway's
-/// manifest-change preview before publishing.
+/// Render a gateway connection scaffold containing the selected tool identities.
+/// The operator must supply risk and approval policy and approve behavior hashes
+/// from the gateway preview before publishing it.
 #[must_use]
 pub fn gateway_manifest() -> String {
     gateway_manifest_for_profile(ToolProfile::Full)
@@ -31,49 +23,33 @@ pub fn gateway_manifest() -> String {
 pub fn gateway_manifest_for_profile(profile: ToolProfile) -> String {
     let catalog = KomodoMcp::list_tools_for_profile(profile);
     let mut output = String::from(
-        "# Annotation-native scaffold. classification_mode: mcp_annotations makes\n\
-         # the sidecar's MCP annotations the sole source of tool effects and\n\
-         # sensitivity; only the gateway-owned risk is projected here. Before\n\
-         # publishing, add an approved_behavior_hash (64 hex chars) to each tool\n\
-         # from the gateway manifest-change preview's observed_behavior_hash.\n\
+        "# Incomplete connection scaffold: operator policy is required.\n\
+         # Supply each tool's risk and approved_behavior_hash from the gateway\n\
+         # preview, and configure authorization, disclosure, and approvals.\n\
          name: komodo\ntransport: http\nurl: http://komodo-mcp:8000/mcp\nclassification_mode: mcp_annotations\nauth:\n  bearer_env: MCP_GATEWAY_UPSTREAM_BEARER_KOMODO\nsession:\n  isolation: per_call\ntools:\n",
     );
-    for policy in TOOL_REGISTRY
-        .iter()
-        .filter(|spec| catalog.tools.iter().any(|tool| tool.name == spec.name))
-    {
+    for tool in catalog.tools {
         output.push_str("  - name: ");
-        output.push_str(policy.name);
-        output.push_str("\n    risk: ");
-        output.push_str(policy.risk.as_str());
+        output.push_str(&tool.name);
         output.push('\n');
     }
     output
 }
 
-/// Export deployment expectations without connection settings or credentials.
-/// Approval policy remains gateway-owned; `requiresReview` is the source claim.
-///
-/// # Panics
-/// Panics if a published tool lacks its executable registry entry or required
-/// review metadata, indicating an inconsistent static tool definition.
+/// Export the standard MCP declarations with gateway-qualified tool identities.
+/// Schemas, descriptions, and factual behavior are source-owned. Authorization,
+/// disclosure, risk, roles, and approval policy are operator-owned.
 #[must_use]
 pub fn gateway_contract_for_profile(profile: ToolProfile) -> serde_json::Value {
-    let catalog = KomodoMcp::list_tools_for_profile(profile);
-    let tools: Vec<_> = catalog.tools.iter().map(|tool| {
-        let spec = TOOL_REGISTRY.iter().find(|spec| spec.name == tool.name)
-            .expect("published tool must have an executable registry entry");
-        let review = tool.meta.as_ref()
-            .and_then(|meta| meta.get("io.modelcontextprotocol/action-metadata"))
-            .and_then(|metadata| metadata.get("requiresReview"))
-            .and_then(serde_json::Value::as_bool)
-            .expect("published tool must declare its review requirement");
-        serde_json::json!({
-            "name": format!("komodo.{}", spec.name),
-            "governance": {"risk": spec.risk.as_str(), "side_effects": spec.side_effects, "pii": spec.pii},
-            "requiresReview": review
+    let tools: Vec<_> = KomodoMcp::list_tools_for_profile(profile)
+        .tools
+        .into_iter()
+        .map(|mut tool| {
+            tool.name = format!("komodo.{}", tool.name).into();
+            tool.meta = None;
+            tool
         })
-    }).collect();
+        .collect();
     serde_json::json!({"sourceVersion": env!("CARGO_PKG_VERSION"), "tools": tools})
 }
 
@@ -84,7 +60,7 @@ mod tests {
     use super::gateway_manifest;
 
     #[test]
-    fn contract_covers_every_profile_tool_with_registry_governance() {
+    fn contract_preserves_standard_declarations_without_operator_policy() {
         use komodo_mcp::{KomodoMcp, ToolProfile};
         for profile in [
             ToolProfile::Full,
@@ -96,64 +72,49 @@ mod tests {
             let tools = contract["tools"].as_array().unwrap();
             let catalog = KomodoMcp::list_tools_for_profile(profile);
             assert_eq!(tools.len(), catalog.tools.len());
-            for tool in tools {
-                let name = tool["name"]
-                    .as_str()
-                    .unwrap()
-                    .strip_prefix("komodo.")
-                    .unwrap();
-                let spec = TOOL_REGISTRY.iter().find(|spec| spec.name == name).unwrap();
-                assert_eq!(tool["governance"]["risk"], spec.risk.as_str());
-                assert_eq!(tool["governance"]["side_effects"], spec.side_effects);
-                assert_eq!(tool["governance"]["pii"], spec.pii);
-                assert!(tool["requiresReview"].is_boolean());
+            for (declaration, source) in tools.iter().zip(catalog.tools) {
+                let mut expected = serde_json::to_value(source).unwrap();
+                expected["name"] = format!("komodo.{}", expected["name"].as_str().unwrap()).into();
+                expected.as_object_mut().unwrap().remove("_meta");
+                assert_eq!(declaration, &expected);
+                for field in ["governance", "risk", "pii", "requiresReview", "_meta"] {
+                    assert!(declaration.get(field).is_none());
+                }
             }
         }
     }
 
     #[test]
-    fn manifest_uses_only_gateway_risks_and_keeps_consequential_writes_high() {
+    fn manifest_requires_operator_policy_without_selecting_it() {
         let manifest = gateway_manifest();
-        let risks: Vec<_> = manifest
-            .lines()
-            .filter_map(|line| line.strip_prefix("    risk: "))
-            .collect();
-        assert_eq!(risks.len(), TOOL_REGISTRY.len());
-        assert!(
-            risks
-                .iter()
-                .all(|risk| ["low", "medium", "high"].contains(risk))
-        );
-        for tool in [
-            "stacks.config.patch",
-            "stacks.compose.write",
-            "stacks.environment.write",
-            "stacks.commands.write",
-            "stacks.file.write",
-            "stacks.webhook.update",
-            "stacks.webhook.secret.write",
+        assert!(manifest.contains("operator policy is required"));
+        for field in [
+            "risk",
+            "side_effects",
+            "pii",
+            "requires_approval",
+            "approved_behavior_hash",
         ] {
-            assert!(manifest.contains(&format!("- name: {tool}\n    risk: high\n")));
+            assert!(!manifest.contains(&format!("\n    {field}:")));
         }
     }
 
     #[test]
-    fn manifest_is_annotation_native_and_omits_legacy_classification_flags() {
+    fn manifest_preserves_connection_and_exact_tool_coverage() {
         let manifest = gateway_manifest();
-        for policy in TOOL_REGISTRY {
-            assert_eq!(manifest.matches(policy.name).count(), 1, "{}", policy.name);
-        }
+        let names: Vec<_> = manifest
+            .lines()
+            .filter_map(|line| line.strip_prefix("  - name: "))
+            .collect();
+        assert_eq!(
+            names,
+            TOOL_REGISTRY
+                .iter()
+                .map(|spec| spec.name)
+                .collect::<Vec<_>>()
+        );
         assert!(manifest.contains("classification_mode: mcp_annotations"));
-        assert!(manifest.contains("- name: servers.status\n    risk: low\n"));
-        // A mutation still carries only its gateway-owned risk; annotation mode
-        // derives the effect from the sidecar's annotations at dispatch.
-        assert!(manifest.contains("- name: stacks.deploy\n    risk: low\n"));
-        assert!(manifest.contains("- name: stacks.stop\n    risk: low\n"));
         assert!(manifest.contains("auth:\n  bearer_env: MCP_GATEWAY_UPSTREAM_BEARER_KOMODO"));
         assert!(manifest.contains("isolation: per_call"));
-        // The legacy per-tool classification flags must not be projected: in
-        // annotation mode they are annotation-derived and admission rejects them.
-        assert!(!manifest.contains("\n    side_effects:"));
-        assert!(!manifest.contains("\n    pii:"));
     }
 }
