@@ -1253,6 +1253,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+ "zeroize",
 ]
 
 [[package]]
@@ -1264,6 +1265,7 @@ dependencies = [
  "base64",
  "clap",
  "ed25519-dalek",
+ "getrandom 0.4.3",
  "jsonwebtoken",
  "komodo-api",
  "komodo-mcp",
@@ -1271,6 +1273,7 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "sha2",
  "subtle",
  "thiserror",
  "tokio",

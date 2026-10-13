@@ -22,6 +22,7 @@ upstream when you want to try the binary without a deployment.
 | Configure credentials, timeouts, and ingress | [Configuration reference](configuration.md) |
 | Find tool names, inputs, limits, and sensitivity | [Tool surface](tool-surface.md) |
 | Recover after an interrupted write | [Reconciliation](reconciliation.md) |
+| Transfer literal credential bytes outside model context | [Native file transport](file-transfers.md) |
 | Check versions and platform support | [Compatibility](compatibility.md) |
 | Build or deploy a container | [Builds and releases](releases.md) |
 | Understand the server's boundaries | [Architecture](architecture.md) and [decisions](../DECISIONS.md) |

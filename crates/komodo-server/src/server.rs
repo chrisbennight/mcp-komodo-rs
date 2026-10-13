@@ -50,8 +50,22 @@ pub fn build_router(
     );
     let allowed_hosts = settings.allowed_hosts.clone();
     let allowed_origins = settings.allowed_origins.clone();
+    let files = Arc::new(crate::files::TransferFiles::default());
+    let cleanup_files = files.clone();
+    let cleanup_cancellation = cancellation.child_token();
+    tokio::spawn(async move {
+        cleanup_files
+            .expire_until_shutdown(cleanup_cancellation)
+            .await;
+    });
+    let handler_files = files.clone();
     let service = StreamableHttpService::new(
-        move || Ok(ScopedMcp(handler.clone())),
+        move || {
+            Ok(ScopedMcp {
+                handler: handler.clone(),
+                files: handler_files.clone(),
+            })
+        },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default()
             .with_cancellation_token(cancellation.child_token())
@@ -61,6 +75,11 @@ pub fn build_router(
             .with_json_response(true),
     );
 
+    let limits = RequestLimits::new(
+        settings.max_concurrent_requests,
+        settings.request_timeout,
+        cancellation.clone(),
+    );
     let mcp = Router::new()
         .nest_service("/mcp", service)
         .layer(middleware::from_fn_with_state(
@@ -68,19 +87,21 @@ pub fn build_router(
             enforce_body_limit,
         ))
         .layer(middleware::from_fn_with_state(auth, require_gateway))
-        .layer(middleware::from_fn_with_state(
-            RequestLimits::new(
-                settings.max_concurrent_requests,
-                settings.request_timeout,
-                cancellation.clone(),
-            ),
-            admit,
-        ));
+        .layer(middleware::from_fn_with_state(limits.clone(), admit));
+
+    let transfers = Router::new()
+        .route(
+            "/file-transfers/{id}",
+            get(crate::files::download_http).put(crate::files::upload_http),
+        )
+        .with_state(files)
+        .layer(middleware::from_fn_with_state(limits, admit));
 
     Ok(Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz).with_state(cancellation.clone()))
         .merge(mcp)
+        .merge(transfers)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|_: &Request| tracing::Span::none())

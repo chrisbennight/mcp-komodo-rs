@@ -12,7 +12,8 @@ use komodo_mcp::{KomodoMcp, execution::ExecutionBudget};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams, ServerInfo,
+        CallToolRequestParams, CallToolResult, CustomRequest, CustomResult, ListToolsResult,
+        PaginatedRequestParams, ServerInfo,
     },
     service::RequestContext,
 };
@@ -43,6 +44,13 @@ impl RequestLimits {
 struct RequestLease {
     _permit: Arc<OwnedSemaphorePermit>,
     budget: ExecutionBudget,
+}
+
+pub(crate) fn request_budget(request: &Request) -> Option<ExecutionBudget> {
+    request
+        .extensions()
+        .get::<RequestLease>()
+        .map(|lease| lease.budget.clone())
 }
 
 pub(crate) async fn admit(
@@ -82,11 +90,14 @@ pub(crate) async fn admit(
 }
 
 #[derive(Clone)]
-pub(crate) struct ScopedMcp(pub(crate) KomodoMcp);
+pub(crate) struct ScopedMcp {
+    pub(crate) handler: KomodoMcp,
+    pub(crate) files: Arc<crate::files::TransferFiles>,
+}
 
 impl ServerHandler for ScopedMcp {
     fn get_info(&self) -> ServerInfo {
-        self.0.get_info()
+        self.handler.get_info()
     }
 
     async fn list_tools(
@@ -94,7 +105,7 @@ impl ServerHandler for ScopedMcp {
         params: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        self.0.list_tools(params, context).await
+        self.handler.list_tools(params, context).await
     }
 
     async fn call_tool(
@@ -108,11 +119,73 @@ impl ServerHandler for ScopedMcp {
             .and_then(|parts| parts.extensions.get::<RequestLease>())
             .cloned()
             .ok_or_else(|| ErrorData::internal_error("request lifetime unavailable", None))?;
-        self.0
+        self.handler
             .clone()
             .with_execution_budget(lease.budget.clone())
             .call_tool(params, context)
             .await
+    }
+
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, ErrorData> {
+        let direction = match request.method.as_str() {
+            "files/authorizeUpload" => "upload",
+            "files/authorizeDownload" => "download",
+            _ => {
+                return Err(ErrorData::new(
+                    rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                    "unsupported native file method",
+                    None,
+                ));
+            }
+        };
+        if !crate::files::supports_http(&context.meta, direction) {
+            return Err(ErrorData::invalid_params(
+                "native file authorization requires declared HTTP transfer support",
+                None,
+            ));
+        }
+        let parts = context
+            .extensions
+            .get::<Parts>()
+            .ok_or_else(|| ErrorData::internal_error("file request context unavailable", None))?;
+        let principal = parts
+            .extensions
+            .get::<crate::auth::IdentityPrincipal>()
+            .ok_or_else(|| ErrorData::internal_error("verified file owner unavailable", None))?;
+        let lease = parts
+            .extensions
+            .get::<RequestLease>()
+            .ok_or_else(|| ErrorData::internal_error("request lifetime unavailable", None))?;
+        lease.budget.check()?;
+        // Host was verified by ingress authentication. The service itself serves HTTP;
+        // no forwarded header or model-supplied URL selects the transfer origin.
+        let host = parts
+            .headers
+            .get(axum::http::header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| ErrorData::internal_error("file transfer origin unavailable", None))?;
+        let base = url::Url::parse(&format!("http://{host}/"))
+            .map_err(|_| ErrorData::internal_error("file transfer origin unavailable", None))?;
+        let value = if direction == "upload" {
+            let params = request
+                .params_as::<crate::files::UploadParams>()
+                .map_err(|_| ErrorData::invalid_params("invalid upload metadata", None))?
+                .ok_or_else(|| ErrorData::invalid_params("missing upload metadata", None))?;
+            self.files
+                .authorize_upload(&principal.subject, params, &base)?
+        } else {
+            let params = request
+                .params_as::<crate::files::DownloadParams>()
+                .map_err(|_| ErrorData::invalid_params("invalid download metadata", None))?
+                .ok_or_else(|| ErrorData::invalid_params("missing download metadata", None))?;
+            self.files
+                .authorize_download(&principal.subject, &params, &base)?
+        };
+        Ok(CustomResult::new(value))
     }
 }
 

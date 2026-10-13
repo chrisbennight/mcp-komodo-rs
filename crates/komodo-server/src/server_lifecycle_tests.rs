@@ -104,6 +104,21 @@ impl Fixture {
             .unwrap()
     }
 
+    fn file_request(&self, method: &str, mut params: Value) -> Request<Body> {
+        params["_meta"] = json!({"io.modelcontextprotocol/clientCapabilities":{
+            "files":{"upload":true,"download":true,"transports":["https"]}
+        }});
+        self.request("unused", &json!({})).map(|_| {
+            Body::from(json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}).to_string())
+        })
+    }
+
+    async fn json_response(&self, request: Request<Body>) -> Value {
+        let response = self.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        serde_json::from_slice(&to_bytes(response.into_body(), 16_384).await.unwrap()).unwrap()
+    }
+
     async fn stacks(&self, delay: Duration) {
         Mock::given(method("POST")).and(body_partial_json(json!({"type":"ListStacks"})))
             .respond_with(ResponseTemplate::new(200).set_delay(delay).set_body_json(json!([
@@ -139,6 +154,116 @@ impl Fixture {
             .map(|request| serde_json::from_slice(&request.body).unwrap())
             .collect()
     }
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keep the authenticated native upload, foreign-owner rejection, and download scenario together."
+)]
+async fn native_file_authorization_keeps_gateway_authentication_and_subject_ownership() {
+    let fixture = Fixture::new(Duration::from_secs(2)).await;
+    let mut unauthorized = fixture.file_request("files/authorizeUpload", json!({}));
+    unauthorized.headers_mut().remove("authorization");
+    assert_eq!(
+        fixture
+            .router
+            .clone()
+            .oneshot(unauthorized)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let mut invalid_identity = fixture.file_request("files/authorizeUpload", json!({}));
+    invalid_identity
+        .headers_mut()
+        .insert("x-mcp-identity", "invalid".parse().unwrap());
+    assert_eq!(
+        fixture
+            .router
+            .clone()
+            .oneshot(invalid_identity)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let upload = fixture
+        .json_response(fixture.file_request("files/authorizeUpload", json!({"size":13})))
+        .await;
+    let upload = &upload["result"];
+    let path = Url::parse(upload["upload"]["url"].as_str().unwrap()).unwrap();
+    let uploaded = fixture
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(path.path())
+                .header(
+                    "authorization",
+                    upload["upload"]["headers"]["Authorization"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .body(Body::from("fixture-token"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(uploaded.status(), StatusCode::NO_CONTENT);
+    let params = json!({"uri":upload["file"]["uri"]});
+    let mut foreign = fixture.file_request("files/authorizeDownload", params.clone());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut header = Header::new(Algorithm::EdDSA);
+    header.kid = Some("test-key".into());
+    let token = encode(
+        &header,
+        &json!({"sub":"other-user","iss":"https://gateway.test",
+        "aud":"komodo","iat":now,"exp":now+60,"groups":[],"act":{"sub":"gateway.test"}}),
+        &EncodingKey::from_ed_der(
+            SigningKey::from_bytes(&[7; 32])
+                .to_pkcs8_der()
+                .unwrap()
+                .as_bytes(),
+        ),
+    )
+    .unwrap();
+    foreign
+        .headers_mut()
+        .insert("x-mcp-identity", token.parse().unwrap());
+    assert!(fixture.json_response(foreign).await.get("error").is_some());
+    let authorized = fixture
+        .json_response(fixture.file_request("files/authorizeDownload", params))
+        .await;
+    let download = &authorized["result"]["download"];
+    let path = Url::parse(download["url"].as_str().unwrap()).unwrap();
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(path.path())
+                .header(
+                    "authorization",
+                    download["headers"]["Authorization"].as_str().unwrap(),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 1024).await.unwrap().as_ref(),
+        b"fixture-token"
+    );
+    assert!(fixture.requests().await.is_empty());
+    fixture.cancellation.cancel();
 }
 
 #[tokio::test]
