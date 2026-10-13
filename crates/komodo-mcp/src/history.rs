@@ -4,6 +4,7 @@ use komodo_api::OperationItem;
 use schemars::JsonSchema;
 use serde::Serialize;
 use toml_edit::{DocumentMut, Item, TableLike};
+use url::Url;
 use zeroize::Zeroizing;
 
 use super::{KomodoMcp, McpError, OperationStatus, files::FileValue, normalize_operation};
@@ -215,9 +216,21 @@ fn project_alerter(config: &mut dyn TableLike, path: &str, fields: &mut Vec<Stri
 const URL_CREDENTIAL: &str = "credential-in-original-file";
 
 fn project_endpoint_url(original: &str, kind: Option<&str>) -> Option<String> {
+    project_uri_components(original, kind).or_else(|| {
+        // WHATWG URL parsing also accepts surrounding whitespace and special-scheme
+        // slash variants. Inspect those recognized credentials without changing
+        // an ordinary endpoint that has no credential component.
+        let normalized = Url::parse(original).ok()?;
+        project_uri_components(normalized.as_str(), kind)
+    })
+}
+
+fn project_uri_components(original: &str, kind: Option<&str>) -> Option<String> {
     // URI components identify credentials independently of host or port validity.
     // Preserve each other component verbatim, including its percent encoding.
-    let prefix_len = if let Some((scheme, _)) = original.split_once("://") {
+    let prefix_len = if original.starts_with("//") {
+        2
+    } else if let Some((scheme, _)) = original.split_once("://") {
         if !scheme.starts_with(|c: char| c.is_ascii_alphabetic())
             || !scheme
                 .bytes()
@@ -226,8 +239,6 @@ fn project_endpoint_url(original: &str, kind: Option<&str>) -> Option<String> {
             return None;
         }
         scheme.len() + 3
-    } else if original.starts_with("//") {
-        2
     } else {
         return None;
     };
@@ -485,6 +496,11 @@ mod tests {
                 "//operator:synthetic-password@[invalid-ipv6]/route",
                 "//operator:credential-in-original-file@[invalid-ipv6]/route",
             ),
+            (
+                "Custom",
+                "//operator:synthetic-password@alerts.example.test:bad/public%2Froute?next=https://docs.example.test#source=https://ordinary.example.test",
+                "//operator:credential-in-original-file@alerts.example.test:bad/public%2Froute?next=https://docs.example.test#source=https://ordinary.example.test",
+            ),
         ] {
             let source = format!(
                 "[[alerter]]\n[alerter.config.endpoint]\ntype = '{kind}'\n[alerter.config.endpoint.params]\nurl = '{url}'\n"
@@ -509,6 +525,36 @@ mod tests {
             assert_eq!(result.toml, source);
             assert!(result.original.is_none());
         }
+    }
+
+    #[test]
+    fn standard_url_parser_forms_keep_passwords_in_the_native_original() {
+        for url in [
+            " \thttps://operator:synthetic-password@alerts.example.test/public%2Froute?priority=1 ",
+            "https:/operator:synthetic-password@alerts.example.test/public%2Froute?priority=1",
+            r"https:\\operator:synthetic-password@alerts.example.test/public%2Froute?priority=1",
+        ] {
+            assert_eq!(
+                Url::parse(url).unwrap().password(),
+                Some("synthetic-password")
+            );
+            let source = format!(
+                "[[alerter]]\n[alerter.config.endpoint]\ntype = 'Custom'\n[alerter.config.endpoint.params]\nurl = {}\n",
+                serde_json::to_string(url).unwrap()
+            );
+            let result = PreparedDocument::parse(source.clone()).unwrap();
+            assert!(!result.toml.contains("synthetic-password"));
+            assert!(
+                result
+                    .toml
+                    .contains("alerts.example.test/public%2Froute?priority=1")
+            );
+            assert_eq!(*result.original.unwrap(), source.into_bytes());
+        }
+        let source = "[[alerter]]\n[alerter.config.endpoint]\ntype = 'Custom'\n[alerter.config.endpoint.params]\nurl = '  https:/alerts.example.test/public%2Froute?token=ordinary-reference  '\n";
+        let result = PreparedDocument::parse(source.into()).unwrap();
+        assert_eq!(result.toml, source);
+        assert!(result.original.is_none());
     }
 
     #[test]
