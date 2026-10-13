@@ -1,5 +1,6 @@
 //! MCP catalog, normalization, and dispatch for Komodo.
 
+mod errors;
 pub mod execution;
 pub mod files;
 mod networks;
@@ -10,9 +11,9 @@ use std::{
 };
 
 use komodo_api::{
-    Action, ApiError, BuildInfo, ComposeFile, DeploymentInfo, KomodoApi, Log, MutationReceipt,
-    OperationItem, RepoInfo, ResourceListItem, ResourceVersion, ServerInfo, StackConfigDetail,
-    StackConfigPatch, StackDetail, StackInfo, StackService, SystemCommand,
+    Action, BuildInfo, ComposeFile, DeploymentInfo, KomodoApi, Log, MutationReceipt, OperationItem,
+    RepoInfo, ResourceListItem, ResourceVersion, ServerInfo, StackConfigDetail, StackConfigPatch,
+    StackDetail, StackInfo, StackService, SystemCommand,
 };
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -1430,7 +1431,11 @@ impl KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         parse::<EmptyInput>(params)?;
         structured(SystemStatusOutput {
-            version: self.read.version().await.map_err(api_error)?,
+            version: self
+                .read
+                .version()
+                .await
+                .map_err(|error| self.api_error(error))?,
             reachable: true,
         })
     }
@@ -1442,7 +1447,10 @@ impl KomodoMcp {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
         let output = search(
-            self.read.servers().await.map_err(api_error)?,
+            self.read
+                .servers()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input,
             normalize_server,
         )?;
@@ -1460,7 +1468,10 @@ impl KomodoMcp {
         let input = parse::<SelectorInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
-            self.read.servers().await.map_err(api_error)?,
+            self.read
+                .servers()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
         structured(normalize_server(item))
@@ -1473,7 +1484,10 @@ impl KomodoMcp {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
         let output = search(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input,
             normalize_stack,
         )?;
@@ -1491,7 +1505,10 @@ impl KomodoMcp {
         let input = parse::<SelectorInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
         structured(normalize_stack(item))
@@ -1505,7 +1522,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         input.window.validate()?;
         let item = select(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
         structured(normalize_stack_diagnostics(item, input.window))
@@ -1519,10 +1539,17 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         input.window.validate()?;
         let item = select(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
-        let detail = self.read.stack_detail(&item.id).await.map_err(api_error)?;
+        let detail = self
+            .read
+            .stack_detail(&item.id)
+            .await
+            .map_err(|error| self.api_error(error))?;
         structured(normalize_stack_config(
             item.name,
             detail.config,
@@ -1538,10 +1565,17 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         input.window.validate()?;
         let item = select(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
-        let detail = self.read.stack_detail(&item.id).await.map_err(api_error)?;
+        let detail = self
+            .read
+            .stack_detail(&item.id)
+            .await
+            .map_err(|error| self.api_error(error))?;
         structured(normalize_compose(input.source, detail, input.window))
     }
 
@@ -1552,10 +1586,17 @@ impl KomodoMcp {
         let input = parse::<SelectorInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
-        let detail = self.read.stack_detail(&item.id).await.map_err(api_error)?;
+        let detail = self
+            .read
+            .stack_detail(&item.id)
+            .await
+            .map_err(|error| self.api_error(error))?;
         structured(EnvironmentView {
             environment: detail.config.environment,
         })
@@ -1568,10 +1609,17 @@ impl KomodoMcp {
         let input = parse::<SelectorInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
-        let detail = self.read.stack_detail(&item.id).await.map_err(api_error)?;
+        let detail = self
+            .read
+            .stack_detail(&item.id)
+            .await
+            .map_err(|error| self.api_error(error))?;
         structured(normalize_commands(detail.config))
     }
 
@@ -1582,10 +1630,17 @@ impl KomodoMcp {
         let input = parse::<SelectorInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
-        let detail = self.read.stack_detail(&item.id).await.map_err(api_error)?;
+        let detail = self
+            .read
+            .stack_detail(&item.id)
+            .await
+            .map_err(|error| self.api_error(error))?;
         structured(normalize_webhook_status(&detail.config))
     }
 
@@ -1596,10 +1651,17 @@ impl KomodoMcp {
         let input = parse::<SelectorInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
-        let detail = self.read.stack_detail(&item.id).await.map_err(api_error)?;
+        let detail = self
+            .read
+            .stack_detail(&item.id)
+            .await
+            .map_err(|error| self.api_error(error))?;
         structured(normalize_webhook_secret(
             detail.config.webhook_secret,
             self.credential_files.as_ref(),
@@ -1613,14 +1675,17 @@ impl KomodoMcp {
         let input = parse::<LogTailInput>(params)?;
         validate_log_tail(&input)?;
         let item = select(
-            self.read.stacks().await.map_err(api_error)?,
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
         let log = self
             .read
             .stack_log(&item.id, &input.services, input.tail, input.timestamps)
             .await
-            .map_err(api_error)?;
+            .map_err(|error| self.api_error(error))?;
         structured(LogTailView {
             command: log.command,
             stdout: log.stdout,
@@ -1636,7 +1701,10 @@ impl KomodoMcp {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
         let output = search(
-            self.read.deployments().await.map_err(api_error)?,
+            self.read
+                .deployments()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input,
             normalize_deployment,
         )?;
@@ -1654,7 +1722,10 @@ impl KomodoMcp {
         let input = parse::<SelectorInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
-            self.read.deployments().await.map_err(api_error)?,
+            self.read
+                .deployments()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
         structured(normalize_deployment(item))
@@ -1667,7 +1738,10 @@ impl KomodoMcp {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
         let output = search(
-            self.read.builds().await.map_err(api_error)?,
+            self.read
+                .builds()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input,
             normalize_build,
         )?;
@@ -1685,7 +1759,10 @@ impl KomodoMcp {
         let input = parse::<SelectorInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
-            self.read.builds().await.map_err(api_error)?,
+            self.read
+                .builds()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input.selector,
         )?;
         structured(normalize_build(item))
@@ -1698,7 +1775,10 @@ impl KomodoMcp {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
         let output = search(
-            self.read.repos().await.map_err(api_error)?,
+            self.read
+                .repos()
+                .await
+                .map_err(|error| self.api_error(error))?,
             &input,
             normalize_repo,
         )?;
@@ -1715,7 +1795,13 @@ impl KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SelectorInput>(params)?;
         validate_selector(&input.selector)?;
-        let item = select(self.read.repos().await.map_err(api_error)?, &input.selector)?;
+        let item = select(
+            self.read
+                .repos()
+                .await
+                .map_err(|error| self.api_error(error))?,
+            &input.selector,
+        )?;
         structured(normalize_repo(item))
     }
 
@@ -1732,7 +1818,11 @@ impl KomodoMcp {
             ));
         }
         let query = validate_query(input.query.as_deref())?;
-        let page = self.read.operations(input.page).await.map_err(api_error)?;
+        let page = self
+            .read
+            .operations(input.page)
+            .await
+            .map_err(|error| self.api_error(error))?;
         let next_page = page.next_page;
         let matches = page
             .operations
@@ -1774,7 +1864,7 @@ impl KomodoMcp {
             .read
             .update(&input.operation_id)
             .await
-            .map_err(operation_lookup_error)?;
+            .map_err(|error| self.operation_lookup_error(error))?;
         structured(normalize_operation(item))
     }
 
@@ -1789,7 +1879,7 @@ impl KomodoMcp {
             .read
             .update_logs(&input.operation_id)
             .await
-            .map_err(operation_lookup_error)?;
+            .map_err(|error| self.operation_lookup_error(error))?;
         structured(normalize_operation_logs(logs, input.window))
     }
 
@@ -1803,39 +1893,62 @@ impl KomodoMcp {
         let target_id = match action {
             Action::DeployStack | Action::RestartStack | Action::StopStack => {
                 select(
-                    self.read.stacks().await.map_err(api_error)?,
+                    self.read
+                        .stacks()
+                        .await
+                        .map_err(|error| self.api_error(error))?,
                     &input.selector,
                 )?
                 .id
             }
             Action::DeployDeployment | Action::RestartDeployment => {
                 select(
-                    self.read.deployments().await.map_err(api_error)?,
+                    self.read
+                        .deployments()
+                        .await
+                        .map_err(|error| self.api_error(error))?,
                     &input.selector,
                 )?
                 .id
             }
             Action::RunBuild | Action::CancelBuild => {
                 select(
-                    self.read.builds().await.map_err(api_error)?,
+                    self.read
+                        .builds()
+                        .await
+                        .map_err(|error| self.api_error(error))?,
                     &input.selector,
                 )?
                 .id
             }
             Action::PullRepo => {
-                select(self.read.repos().await.map_err(api_error)?, &input.selector)?.id
+                select(
+                    self.read
+                        .repos()
+                        .await
+                        .map_err(|error| self.api_error(error))?,
+                    &input.selector,
+                )?
+                .id
             }
         };
         let receipt = self
             .admin()?
             .execute(action, &target_id)
             .await
-            .map_err(|error| mutation_error(error, &target_id, "operations.search"))?;
+            .map_err(|error| self.mutation_error(error, &target_id, "operations.search"))?;
         structured(normalize_receipt(receipt, target_id))
     }
 
     async fn resolve_stack_id(&self, selector: &str) -> Result<String, McpError> {
-        Ok(select(self.read.stacks().await.map_err(api_error)?, selector)?.id)
+        Ok(select(
+            self.read
+                .stacks()
+                .await
+                .map_err(|error| self.api_error(error))?,
+            selector,
+        )?
+        .id)
     }
 
     async fn stack_config_patch(
@@ -1883,7 +1996,7 @@ impl KomodoMcp {
         self.admin()?
             .update_stack(&target, &patch)
             .await
-            .map_err(|error| mutation_error(error, &target, "stacks.config.read"))?;
+            .map_err(|error| self.mutation_error(error, &target, "stacks.config.read"))?;
         structured(ConfigWriteResult { target, applied })
     }
 
@@ -1902,7 +2015,7 @@ impl KomodoMcp {
         self.admin()?
             .update_stack(&target, &patch)
             .await
-            .map_err(|error| mutation_error(error, &target, "stacks.compose.read"))?;
+            .map_err(|error| self.mutation_error(error, &target, "stacks.compose.read"))?;
         structured(ConfigWriteResult {
             target,
             applied: vec!["fileContents".to_owned()],
@@ -1924,7 +2037,7 @@ impl KomodoMcp {
         self.admin()?
             .update_stack(&target, &patch)
             .await
-            .map_err(|error| mutation_error(error, &target, "stacks.environment.read"))?;
+            .map_err(|error| self.mutation_error(error, &target, "stacks.environment.read"))?;
         structured(ConfigWriteResult {
             target,
             applied: vec!["environment".to_owned()],
@@ -1957,7 +2070,7 @@ impl KomodoMcp {
         self.admin()?
             .update_stack(&target, &patch)
             .await
-            .map_err(|error| mutation_error(error, &target, "stacks.commands.read"))?;
+            .map_err(|error| self.mutation_error(error, &target, "stacks.commands.read"))?;
         structured(ConfigWriteResult { target, applied })
     }
 
@@ -1974,7 +2087,7 @@ impl KomodoMcp {
             .admin()?
             .write_stack_file(&target, &input.file_path, &input.contents)
             .await
-            .map_err(|error| mutation_error(error, &target, "operations.search"))?;
+            .map_err(|error| self.mutation_error(error, &target, "operations.search"))?;
         structured(FileWriteResult {
             target,
             applied: vec!["file".to_owned()],
@@ -2011,7 +2124,7 @@ impl KomodoMcp {
         self.admin()?
             .update_stack(&target, &patch)
             .await
-            .map_err(|error| mutation_error(error, &target, "stacks.webhook.status"))?;
+            .map_err(|error| self.mutation_error(error, &target, "stacks.webhook.status"))?;
         structured(ConfigWriteResult { target, applied })
     }
 
@@ -2054,7 +2167,7 @@ impl KomodoMcp {
         self.admin()?
             .update_stack(&target, &patch)
             .await
-            .map_err(|error| mutation_error(error, &target, "stacks.webhook.secret.read"))?;
+            .map_err(|error| self.mutation_error(error, &target, "stacks.webhook.secret.read"))?;
         structured(ConfigWriteResult {
             target,
             applied: vec!["webhookSecret".to_owned()],
@@ -2088,7 +2201,7 @@ impl ServerHandler for KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         let mut invocation = self.clone();
         invocation.rpc_cancellation = Some(context.ct.clone());
-        if let Some(budget) = &invocation.budget {
+        let result = if let Some(budget) = &invocation.budget {
             budget.check()?;
             tokio::select! {
                 biased;
@@ -2102,6 +2215,26 @@ impl ServerHandler for KomodoMcp {
                 () = context.ct.cancelled() => Err(execution::ended()),
                 result = invocation.dispatch(&params) => result,
             }
+        };
+        match result {
+            Err(error)
+                if error.data.as_ref().is_some_and(|data| {
+                    data["upstream"].get("diagnosticFile").is_some()
+                        || data["upstream"].get("diagnosticFileUnavailable").is_some()
+                }) =>
+            {
+                let mut result = structured(CredentialFailureOutput {
+                    code: error.code.0,
+                    message: error.message.to_string(),
+                    data: serde_json::from_value(
+                        error.data.expect("credential-bearing diagnostic data"),
+                    )
+                    .expect("fixed diagnostic and reconciliation fields"),
+                })?;
+                result.is_error = Some(true);
+                Ok(trust_annotated(result))
+            }
+            result => result,
         }
     }
 }
@@ -2162,13 +2295,20 @@ impl ToolSpec {
     }
 }
 
+#[derive(Serialize, JsonSchema)]
+struct CredentialFailureOutput {
+    code: i32,
+    message: String,
+    data: errors::CredentialFailureData,
+}
+
 fn tool<I: JsonSchema, O: JsonSchema>(spec: &ToolSpec) -> Tool {
     Tool::new(
         Cow::Borrowed(spec.name),
         Cow::Borrowed(spec.description),
         Arc::new(schema_object::<I>()),
     )
-    .with_raw_output_schema(Arc::new(schema_object::<O>()))
+    .with_raw_output_schema(Arc::new(tool_output_schema::<O>()))
     .with_annotations(
         ToolAnnotations::new()
             .read_only(spec.behavior.read_only)
@@ -2176,6 +2316,32 @@ fn tool<I: JsonSchema, O: JsonSchema>(spec: &ToolSpec) -> Tool {
             .idempotent(spec.behavior.idempotent)
             .open_world(spec.behavior.open_world),
     )
+}
+
+fn tool_output_schema<O: JsonSchema>() -> Map<String, Value> {
+    let mut success = schema_object::<O>();
+    let definitions = success.remove("$defs");
+    let mut failure = schema_object::<CredentialFailureOutput>();
+    let failure_definitions = failure.remove("$defs");
+    let mut schema = serde_json::json!({"type":"object", "anyOf":[success, failure]})
+        .as_object()
+        .expect("fixed schema object")
+        .clone();
+    let mut definitions = definitions.unwrap_or_else(|| serde_json::json!({}));
+    if let Some(Value::Object(failure_definitions)) = failure_definitions {
+        for (name, definition) in failure_definitions {
+            let old = definitions
+                .as_object_mut()
+                .expect("schema definitions object")
+                .insert(name, definition.clone());
+            assert!(
+                old.is_none_or(|old| old == definition),
+                "shared schema definitions must agree"
+            );
+        }
+    }
+    schema.insert("$defs".to_owned(), definitions);
+    schema
 }
 
 fn schema_object<T: JsonSchema>() -> Map<String, Value> {
@@ -2306,45 +2472,6 @@ fn trust_annotated(mut result: CallToolResult) -> CallToolResult {
         .0
         .insert(TRUST_ANNOTATIONS_KEY.to_owned(), trust);
     result
-}
-
-// `Result::map_err` passes ownership to its adapter; retaining this signature keeps call sites
-// non-capturing and guarantees the source error is dropped after conversion to the safe vocabulary.
-#[allow(clippy::needless_pass_by_value)]
-fn api_error(error: ApiError) -> McpError {
-    McpError::internal_error(error.to_string(), None)
-}
-
-// Only errors returned after a mutation was submitted carry uncertain-outcome
-// guidance. Never include submitted configuration, paths, commands or secrets.
-fn mutation_error(error: ApiError, target: &str, read_tool: &'static str) -> McpError {
-    match error {
-        error if error.mutation_outcome_unknown() => McpError::internal_error(
-            "Komodo mutation outcome is unknown; reconcile before any new write",
-            Some(serde_json::json!({
-                "outcome": "unknown",
-                "target": target,
-                "retrySafe": false,
-                "operationIdAvailable": false,
-                "reconcileWith": read_tool,
-                "operatorVerificationRequired": true
-            })),
-        ),
-        other => api_error(other),
-    }
-}
-
-// A stable-id lookup that resolves nothing is a caller-visible "not found",
-// distinct from an upstream fault. Everything else keeps the safe internal
-// vocabulary.
-#[allow(clippy::needless_pass_by_value)]
-fn operation_lookup_error(error: ApiError) -> McpError {
-    match error {
-        error if error.resource_not_found() => {
-            McpError::invalid_params("operation not found", None)
-        }
-        other => api_error(other),
-    }
 }
 
 struct SearchPage<T> {

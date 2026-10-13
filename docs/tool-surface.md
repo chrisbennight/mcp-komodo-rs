@@ -289,6 +289,40 @@ offers no revision precondition. Komodo may retain submitted configuration,
 content, commands, or secret values in its own traces or operation history;
 affected tool descriptions disclose that upstream behavior.
 
+## Upstream failure details
+
+An unsuccessful Core response retains its HTTP status, named request, and bounded
+diagnostic in the MCP error's `data.upstream`. Core's `error` and `trace` fields
+remain ordinary untrusted data. A UTF-8 text response uses the same diagnostic
+shape with an empty trace; an empty or non-UTF-8 response has a null diagnostic.
+The shared response limit applies before parsing. Diagnostic values never enter
+server logs, metrics, or Rust error formatting.
+
+Only literal values explicitly known from the request's API credentials or
+`UpdateStack.webhook_secret` receive the credential boundary. If a diagnostic
+echoes one of these values, its ordinary projection separates text around that value and reports
+`credentialValuesPresent: true`; `diagnosticFile` holds native metadata for the
+exact original response. Ordinary paths, addresses, configuration references, and
+text mentioning passwords or tokens do not trigger a speculative content scan.
+When native transfer or capacity is unavailable, `diagnosticFileUnavailable`
+explains that limitation while preserving the ordinary diagnostic projection.
+The original credential bytes never fall back into context. Changed text is an
+object with `segments`, rather than joining fragments that could reconstruct a
+credential. At most 256 segments per text field remain inline; an explicit
+`diagnosticUnavailable` reason directs the caller to the native original when
+that bound is exceeded. Received HTTP status and request survive interrupted or
+oversized failure bodies with an explicit body-availability reason.
+
+Credential-bearing failures use a standard MCP tool-error result (`isError:
+true`) whose structured content contains `code`, `message`, and `data`. The
+output schema includes that form, allowing the gateway to import its native file.
+Other failures retain JSON-RPC error responses.
+
+Submitted mutations retain their uncertain-outcome and reconciliation facts
+alongside the diagnostic. Authentication, authorization, and not-found responses
+remain distinct. Reads retry a server-unavailable response at most once; mutations
+are never replayed. A diagnostic is evidence, not permission to retry a write.
+
 ## Metadata ownership
 
 Standard MCP annotations describe whether an operation reads, destroys,
