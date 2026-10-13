@@ -167,9 +167,16 @@ impl ServerHandler for ScopedMcp {
             .and_then(|parts| parts.extensions.get::<RequestLease>())
             .cloned()
             .ok_or_else(|| ErrorData::internal_error("request lifetime unavailable", None))?;
+        let owner = context
+            .extensions
+            .get::<Parts>()
+            .and_then(|parts| parts.extensions.get::<crate::auth::IdentityPrincipal>())
+            .map(|principal| principal.subject.clone())
+            .ok_or_else(|| ErrorData::internal_error("verified file owner unavailable", None))?;
         self.handler
             .clone()
             .with_execution_budget(lease.budget.clone())
+            .with_credential_files(owner, self.files.clone())
             .call_tool(params, context)
             .await
     }

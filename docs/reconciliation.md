@@ -49,7 +49,7 @@ which stage the request reached.
 | `stacks.environment.write` | Authorized `stacks.environment.read`; compare only the intended environment |
 | `stacks.commands.write` | Authorized `stacks.commands.read`; compare only the fields submitted |
 | `stacks.webhook.update` | `stacks.webhook.status`; compare enabled/force-deploy flags |
-| `stacks.webhook.secret.write` | Authorized `stacks.webhook.secret.read`; custom value comparison must not enter logs or audit records |
+| `stacks.webhook.secret.write` | `stacks.webhook.status` for source; native `stacks.webhook.secret.read` file transfer for a custom-value comparison outside model context |
 
 Use the mutation error's `target` as the `selector` for stack reads.
 `operations.search` filters operation ID or kind. Search/status results include

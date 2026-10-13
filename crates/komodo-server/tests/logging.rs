@@ -17,6 +17,7 @@ const WRITE: &str = "synthetic-write-log-sentinel";
 const UPSTREAM_ERROR: &str = "synthetic-upstream-error-sentinel";
 const CLIENT: &str = "synthetic-client-log-sentinel";
 const URI_MARKER: &str = "synthetic-uri-log-sentinel";
+const TOKEN: &str = "synthetic-webhook-token-sentinel";
 
 fn capture(reader: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> JoinHandle<Vec<u8>> {
     tokio::spawn(async move {
@@ -47,7 +48,10 @@ async fn fake_upstream() -> (MockServer, String) {
             json!([{"id":"stack-id", "name":RESOURCE, "type":"Stack",
             "info":{"state":"running", "services":[]}}]),
         ),
-        ("GetStack", json!({"config":{"environment":CONTENT}})),
+        (
+            "GetStack",
+            json!({"config":{"environment":CONTENT,"webhook_secret":TOKEN}}),
+        ),
         ("UpdateStack", json!({"config":{"environment":WRITE}})),
     ] {
         Mock::given(method("POST"))
@@ -87,7 +91,6 @@ async fn request(
 ) -> Value {
     let response = client
         .post(url)
-        .header("host", "localhost")
         .header("accept", "application/json, text/event-stream")
         .header("authorization", format!("Bearer {BEARER}"))
         .header("x-mcp-identity", identity)
@@ -149,6 +152,78 @@ async fn exercise_tools(client: &reqwest::Client, url: &str, identity: &str) {
     assert!(!failure.to_string().contains(UPSTREAM_ERROR));
 }
 
+async fn exercise_files(client: &reqwest::Client, url: &str, identity: &str) -> Vec<String> {
+    let meta = json!({"io.modelcontextprotocol/clientCapabilities":{
+        "files":{"upload":true,"download":true,"transports":["https", "http"]}
+    }});
+    let upload = request(
+        client,
+        url,
+        identity,
+        "files/authorizeUpload",
+        json!({"_meta":meta,"name":"token.txt","mimeType":"text/plain"}),
+    )
+    .await;
+    let grant = upload["result"]["upload"]["headers"]["Authorization"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        client
+            .put(upload["result"]["upload"]["url"].as_str().unwrap())
+            .header("authorization", grant)
+            .body(TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
+    let written = request(
+        client,
+        url,
+        identity,
+        "tools/call",
+        json!({
+            "name":"stacks.webhook.secret.write","arguments":{"selector":RESOURCE,
+                "secret":{"source":"custom","file":upload["result"]["file"]}}
+        }),
+    )
+    .await;
+    assert!(written["result"]["structuredContent"].is_object());
+    assert!(!written.to_string().contains(TOKEN));
+    let read = request(
+        client,
+        url,
+        identity,
+        "tools/call",
+        json!({
+            "name":"stacks.webhook.secret.read","arguments":{"selector":RESOURCE}
+        }),
+    )
+    .await;
+    assert!(!read.to_string().contains(TOKEN));
+    let download = request(
+        client,
+        url,
+        identity,
+        "files/authorizeDownload",
+        json!({"_meta":meta,"uri":read["result"]["structuredContent"]["file"]["uri"]}),
+    )
+    .await;
+    let download_grant = download["result"]["download"]["headers"]["Authorization"]
+        .as_str()
+        .unwrap();
+    let response = client
+        .get(download["result"]["download"]["url"].as_str().unwrap())
+        .header("authorization", download_grant)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), TOKEN);
+    vec![grant.to_owned(), download_grant.to_owned()]
+}
+
 fn assert_diagnostics(bytes: &[u8], filter: &str, identity: &str) {
     let output = std::str::from_utf8(bytes).unwrap();
     for marker in [
@@ -159,6 +234,7 @@ fn assert_diagnostics(bytes: &[u8], filter: &str, identity: &str) {
         UPSTREAM_ERROR,
         CLIENT,
         URI_MARKER,
+        TOKEN,
         "synthetic-read-secret",
         "synthetic-admin-secret",
         identity,
@@ -239,7 +315,7 @@ async fn actual_http_binary_preserves_tool_content_and_excludes_it_from_every_lo
             )
             .env("KOMODO_MCP_IDENTITY_ISSUER", "https://gateway.test")
             .env("KOMODO_MCP_IDENTITY_ACTOR", "gateway.test")
-            .env("KOMODO_MCP_ALLOWED_HOSTS", "localhost")
+            .env("KOMODO_MCP_ALLOWED_HOSTS", format!("127.0.0.1:{port}"))
             .env("KOMODO_MCP_LOG_LEVEL", filter)
             .env("RUST_LOG", "trace")
             .stdout(Stdio::piped())
@@ -272,6 +348,8 @@ async fn actual_http_binary_preserves_tool_content_and_excludes_it_from_every_lo
             &identity,
         )
         .await;
+        let grants =
+            exercise_files(&client, &format!("http://127.0.0.1:{port}/mcp"), &identity).await;
         child.start_kill().unwrap();
         tokio::time::timeout(Duration::from_secs(5), child.wait())
             .await
@@ -281,6 +359,10 @@ async fn actual_http_binary_preserves_tool_content_and_excludes_it_from_every_lo
             stdout.await.unwrap().is_empty(),
             "HTTP diagnostics belong on stderr"
         );
-        assert_diagnostics(&stderr.await.unwrap(), filter, &identity);
+        let diagnostics = stderr.await.unwrap();
+        for grant in grants {
+            assert!(!std::str::from_utf8(&diagnostics).unwrap().contains(&grant));
+        }
+        assert_diagnostics(&diagnostics, filter, &identity);
     }
 }
