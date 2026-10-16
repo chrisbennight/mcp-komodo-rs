@@ -104,7 +104,7 @@ jobs:
         run: python3 scripts/package_notices.py
       - name: Retain dependency notices
         if: steps.scope.outputs.image == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dependency-notices-${{ github.sha }}
           path: artifacts/dependency-notices.*
@@ -142,7 +142,7 @@ jobs:
         run: bash scripts/scan_image.sh
       - name: Retain image inventory and scan reports
         if: (steps.scope.outputs.image == 'true') && (always())
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-evidence-${{ github.sha }}
           path: artifacts/*.json
@@ -177,7 +177,7 @@ jobs:
         run: bash scripts/scan_image.sh
       - name: Retain image inventory and scan reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-evidence-${{ github.sha }}
           path: artifacts/*.json
@@ -230,7 +230,7 @@ jobs:
           SBOM_BUNDLE: ${{ steps.sbom.outputs.bundle-path }}
         run: python3 scripts/package_release_evidence.py
       - name: Retain the complete release evidence bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-evidence-${{ github.sha }}
           path: artifacts/release-evidence.*
