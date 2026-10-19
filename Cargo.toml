@@ -17,7 +17,7 @@ repository = "https://github.com/chrisbennight/mcp-komodo-rs"
 aho-corasick = "1"
 anyhow = "1"
 axum = "0.8"
-base64 = "0.22"
+base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
 getrandom = "0.4"
