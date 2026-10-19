@@ -53,6 +53,8 @@ push to `main`. The tested image remains available by its immutable reference.
 Publishing several tags is not atomic. If a push fails, check the registry and
 workflow before rerunning it rather than assuming nothing was published.
 
+The image revision label identifies the full checked-out Git commit, matching
+the source revision used by the publisher and downstream image verification.
 The current workflow builds `linux/amd64` on a GitHub-hosted Ubuntu runner.
 Other platforms and standalone release binaries are not published yet.
 
@@ -114,12 +116,23 @@ records. It retains the signed bundles for independent verification. After
 downloading dependency notices from the same workflow's test job, the publication
 job assembles `release-evidence.zip` and its SHA-256 checksum. The bundle contains
 the original scan reports, Rust notices and index, signed provenance/SBOM bundles,
-and a release record binding their hashes to the source commit and immutable
-image reference. Packaging rejects mismatched source, scan, notice, or attestation
+and a release record binding their hashes to the source repository, commit,
+ref, designated publication workflow, run and attempt, and immutable image
+reference. Packaging rejects mismatched source, scan, notice, or attestation
 subject data. Its subject check is not cryptographic signature verification.
 
-`release-evidence-<source SHA>` is retained in Actions for 90 days. Attach that
+`release-evidence-<source SHA>-<run ID>-<run attempt>` is retained in Actions for 90 days. Attach that
 bundle and checksum to the durable version release before advertising it.
+
+After assembly succeeds, CI also retains the compact `komodo-publication.json`
+as `komodo-publication-<run ID>-<run attempt>`. It shares the unsigned index's
+validated source and workflow context and records the verified revision tag,
+manifest digest and platform. A failed or skipped assembly cannot upload this
+record, and stale output is cleared before validation. Consumers must authenticate
+the designated successful workflow run and its artifact; the unsigned record
+does not independently verify signatures or grant deployment authority. The
+original signed payloads remain intact in the archive.
+
 Provenance signatures describe the build; they do not certify absence of
 vulnerabilities or make the source lockfile inventory a list of linked crates.
 
@@ -153,7 +166,7 @@ the supported Linux container target and available access profiles accurately;
 do not imply untested operating systems or clients are supported.
 
 After the tag workflow succeeds, record the registry manifest digest and exact
-source commit in the release notes. Download `release-evidence-<source SHA>`,
+source commit in the release notes. Download `release-evidence-<source SHA>-<run ID>-<run attempt>`,
 verify `sha256sum -c release-evidence.sha256`, and attach its archive and checksum
 to the durable GitHub release record before advertising it. Actions retention is
 temporary. Use the official verifier against the immutable image reference:

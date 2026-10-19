@@ -25,6 +25,8 @@ class ReleaseEvidenceTests(unittest.TestCase):
             "GITHUB_EVENT_NAME": "push", "GITHUB_REPOSITORY": "chrisbennight/mcp-komodo-rs",
             "GITHUB_SHA": "a" * 40, "GITHUB_REF": "refs/tags/v0.1.0",
             "PUBLISHED_IMAGE_DIGEST": digest, "RUNNER_TEMP": str(runner),
+            "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2",
+            "GITHUB_WORKFLOW_REF": "chrisbennight/mcp-komodo-rs/.github/workflows/ci.yml@refs/tags/v0.1.0",
         }
         files = {}
         for name in ("sbom.cdx.json", "rust-sbom.cdx.json", "vulnerabilities.json"):
@@ -55,6 +57,13 @@ class ReleaseEvidenceTests(unittest.TestCase):
                 record = json.loads(bundle.read("release-record.json"))
                 self.assertEqual(record["image"], evidence.IMAGE + "@" + env["PUBLISHED_IMAGE_DIGEST"])
                 self.assertEqual(record["sourceCommit"], env["GITHUB_SHA"])
+                context = evidence.publication_context(env)
+                self.assertEqual({key: record[key] for key in context}, context)
+                self.assertEqual(json.loads((root / "artifacts/komodo-publication.json").read_text()), {
+                    "schema_version": 1, **context,
+                    "images": [{"repository": evidence.IMAGE, "tag": "sha-" + env["GITHUB_SHA"],
+                                "digest": env["PUBLISHED_IMAGE_DIGEST"], "platforms": ["linux/amd64"]}],
+                })
                 for name, metadata in record["files"].items():
                     self.assertEqual(metadata["sha256"], hashlib.sha256(bundle.read(name)).hexdigest())
                 self.assertEqual(bundle.read("provenance.sigstore.json"), Path(env["PROVENANCE_BUNDLE"]).read_bytes())
@@ -91,6 +100,36 @@ class ReleaseEvidenceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     evidence.package(root, env)
                 self.assertFalse((artifacts / "release-evidence.zip").exists())
+
+    def test_failed_attempt_removes_stale_outputs_and_new_attempt_binds_its_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = self.fixture(root)
+            evidence.package(root, env)
+            env["GITHUB_RUN_ATTEMPT"] = "0"
+            with self.assertRaises(ValueError):
+                evidence.package(root, env)
+            for name in ("release-evidence.zip", "release-evidence.sha256", "komodo-publication.json"):
+                self.assertFalse((root / "artifacts" / name).exists())
+            env["GITHUB_RUN_ATTEMPT"] = "3"
+            evidence.package(root, env)
+            self.assertEqual(json.loads((root / "artifacts/komodo-publication.json").read_text())["run_attempt"], 3)
+            (root / "artifacts/vulnerabilities.json").write_text("changed scan")
+            with self.assertRaises(ValueError):
+                evidence.package(root, env)
+            self.assertFalse((root / "artifacts/komodo-publication.json").exists())
+
+    def test_ci_retains_the_exact_emitted_record_only_after_assembly_succeeds(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
+        assembly = workflow.split("      - name: Assemble release evidence\n", 1)[1]
+        self.assertIn("        id: evidence\n", assembly)
+        self.assertIn("name: release-evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}", assembly)
+        retained = assembly.split("      - name: Retain verified publication record\n", 1)[1]
+        self.assertIn("        if: steps.evidence.outcome == 'success'\n", retained)
+        self.assertIn("name: komodo-publication-${{ github.run_id }}-${{ github.run_attempt }}", retained)
+        self.assertIn("path: artifacts/komodo-publication.json", retained)
+        self.assertIn("if-no-files-found: error", retained)
+        self.assertNotIn("always()", retained)
 
     def test_size_limit_is_enforced_on_read(self):
         with tempfile.TemporaryDirectory() as directory:

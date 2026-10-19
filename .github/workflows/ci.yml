@@ -224,15 +224,26 @@ jobs:
           path: artifacts
           digest-mismatch: error
       - name: Assemble release evidence
+        id: evidence
         env:
           PUBLISHED_IMAGE_DIGEST: ${{ steps.publish.outputs.image_digest }}
           PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
           SBOM_BUNDLE: ${{ steps.sbom.outputs.bundle-path }}
         run: python3 scripts/package_release_evidence.py
       - name: Retain the complete release evidence bundle
+        if: steps.evidence.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-evidence-${{ github.sha }}
+          name: release-evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/release-evidence.*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Retain verified publication record
+        if: steps.evidence.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: komodo-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/komodo-publication.json
           if-no-files-found: error
           retention-days: 90
