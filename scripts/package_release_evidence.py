@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 import zipfile
 
-from publish_image import DIGEST, IMAGE, publication_tags
+from publish_image import DIGEST, IMAGE, publication_context
 
 
 FILES = (
@@ -46,16 +46,19 @@ def check_subject(bundle: bytes, digest: str) -> None:
 
 
 def package(root: Path, environment: dict[str, str]) -> Path:
-    publication_tags(environment)
-    digest = environment.get("PUBLISHED_IMAGE_DIGEST", "")
-    if not DIGEST.fullmatch(digest):
-        raise ValueError("release evidence requires the verified registry manifest digest")
     artifacts = root / "artifacts"
     if not artifacts.resolve().is_relative_to(root.resolve()):
         raise ValueError("artifact directory escapes repository")
-    for name in ("release-evidence.zip", "release-evidence.zip.tmp", "release-evidence.sha256"):
-        if not (artifacts / name).resolve().is_relative_to(artifacts.resolve()):
-            raise ValueError("release output escapes the artifact directory")
+    outputs = [artifacts / name for name in ("release-evidence.zip", "release-evidence.zip.tmp",
+                                             "release-evidence.sha256", "komodo-publication.json")]
+    if any(not path.resolve().is_relative_to(artifacts.resolve()) for path in outputs):
+        raise ValueError("release output escapes the artifact directory")
+    for path in outputs:
+        path.unlink(missing_ok=True)
+    context = publication_context(environment)
+    digest = environment.get("PUBLISHED_IMAGE_DIGEST", "")
+    if not DIGEST.fullmatch(digest):
+        raise ValueError("release evidence requires the verified registry manifest digest")
     files = {name: read_file(artifacts / name, artifacts) for name in FILES}
     record = json.loads(files["build-record.json"])
     if record.get("commit") != environment["GITHUB_SHA"] or record.get("sourceDirty") is not False:
@@ -77,6 +80,7 @@ def package(root: Path, environment: dict[str, str]) -> Path:
     if sum(map(len, files.values())) > MAX_TOTAL_BYTES:
         raise ValueError("release evidence exceeds its total size bound")
     index = {
+        **context,
         "sourceCommit": environment["GITHUB_SHA"], "sourceRef": environment["GITHUB_REF"],
         "image": f"{IMAGE}@{digest}", "platform": "linux/amd64",
         "files": {name: {"sha256": hashlib.sha256(data).hexdigest()} for name, data in files.items()},
@@ -97,6 +101,11 @@ def package(root: Path, environment: dict[str, str]) -> Path:
         temporary.unlink(missing_ok=True)
     checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
     (artifacts / "release-evidence.sha256").write_text(f"{checksum}  release-evidence.zip\n")
+    (artifacts / "komodo-publication.json").write_text(json.dumps({
+        "schema_version": 1, **context,
+        "images": [{"repository": IMAGE, "tag": "sha-" + context["source_commit"],
+                    "digest": digest, "platforms": ["linux/amd64"]}],
+    }, sort_keys=True) + "\n")
     return archive
 
 

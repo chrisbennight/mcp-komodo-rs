@@ -31,7 +31,10 @@ printf 'included\n' >"$fixture/included"
 docker build --check --progress=plain \
   --build-arg 'BUILDKIT_DOCKERFILE_CHECK=error=true' "$fixture"
 
+revision="$(git rev-parse --verify HEAD)"
+[[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "A full source revision is required" >&2; exit 1; }
 docker build --tag mcp-komodo-rs:ci --progress=plain \
+  --label "org.opencontainers.image.revision=$revision" \
   --label org.opencontainers.image.source=https://github.com/chrisbennight/mcp-komodo-rs \
   --label org.opencontainers.image.licenses=MIT .
 

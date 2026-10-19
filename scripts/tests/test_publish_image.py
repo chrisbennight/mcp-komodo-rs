@@ -34,6 +34,8 @@ class PublicationTests(unittest.TestCase):
             "GITHUB_REF": "refs/heads/main",
             "GITHUB_ACTOR": "release-bot[bot]",
             "GITHUB_TOKEN": "test-only-workflow-token",
+            "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2",
+            "GITHUB_WORKFLOW_REF": f"{publish_image.REPOSITORY}/{publish_image.WORKFLOW}@{overrides.get('GITHUB_REF', 'refs/heads/main')}",
             **overrides,
         }
 
@@ -64,6 +66,9 @@ class PublicationTests(unittest.TestCase):
             {"GITHUB_ACTOR": "--username=other"},
             {"GITHUB_TOKEN": ""},
             {"PUBLICATION_MAIN_SHA": ""},
+            {"GITHUB_RUN_ID": ""}, {"GITHUB_RUN_ID": "1\n"},
+            {"GITHUB_RUN_ATTEMPT": "0"}, {"GITHUB_RUN_ATTEMPT": "1.5"},
+            {"GITHUB_WORKFLOW_REF": "someone/fork/.github/workflows/ci.yml@refs/heads/main"},
         ]
         for override in cases:
             with self.subTest(override=override), patch.object(publish_image.subprocess, "run") as run:

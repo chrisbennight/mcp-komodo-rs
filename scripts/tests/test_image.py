@@ -53,6 +53,9 @@ class ImageSmokeTests(unittest.TestCase):
     def test_smoke_has_no_network_and_never_forwards_inherited_secrets(self) -> None:
         result, calls = self.run_image_check()
         self.assertEqual(result.returncode, 0, result.stderr)
+        built = next(call["args"] for call in calls if call["args"][:3] == ["build", "--tag", "mcp-komodo-rs:ci"])
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        self.assertIn("org.opencontainers.image.revision=" + revision, built)
         created = next(call for call in calls if call["args"][0] == "create")
         args = created["args"]
         self.assertEqual(args[args.index("--network") + 1], "none")

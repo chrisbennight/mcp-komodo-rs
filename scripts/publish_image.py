@@ -17,6 +17,7 @@ from pathlib import Path
 REPOSITORY = "chrisbennight/mcp-komodo-rs"
 IMAGE = f"ghcr.io/{REPOSITORY}"
 LOCAL_IMAGE = "mcp-komodo-rs:ci"
+WORKFLOW = ".github/workflows/ci.yml"
 VERSION = re.compile(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
@@ -69,7 +70,23 @@ def publication_tags(environment: Mapping[str, str]) -> list[str]:
     return [f"{IMAGE}:sha-{sha}", f"{IMAGE}:{release_tag}"]
 
 
+def publication_context(environment: Mapping[str, str]) -> dict:
+    publication_tags(environment)
+    if environment.get("GITHUB_WORKFLOW_REF") != f"{REPOSITORY}/{WORKFLOW}@{environment['GITHUB_REF']}":
+        raise ValueError("publication requires the designated source workflow")
+    for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", environment.get(key, "")):
+            raise ValueError("publication requires a complete workflow run and attempt")
+    return {
+        "source_repository": REPOSITORY, "source_commit": environment["GITHUB_SHA"],
+        "source_ref": environment["GITHUB_REF"], "workflow": WORKFLOW,
+        "run_id": int(environment["GITHUB_RUN_ID"]),
+        "run_attempt": int(environment["GITHUB_RUN_ATTEMPT"]),
+    }
+
+
 def publish(environment: Mapping[str, str], expected_image_digest: str) -> str:
+    publication_context(environment)
     tags = publication_tags(environment)
     if environment.get("GITHUB_REF") == "refs/heads/main":
         current_main = environment.get("PUBLICATION_MAIN_SHA", "")
@@ -116,6 +133,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.check:
+            publication_context(os.environ)
             for tag in publication_tags(os.environ):
                 print(tag)
         else:
