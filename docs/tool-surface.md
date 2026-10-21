@@ -154,7 +154,9 @@ Operation search and status expose `previousConfiguration` and
 `currentConfiguration` when Core supplies history. Each includes `toml`,
 `credentialFields`, and native `originalFile` metadata. Ordinary facts stay
 inline; literal credentials use exact native originals with explicit transfer
-unavailability. See
+unavailability. Malformed history reports `formatError`, an empty inline
+`toml`, and its native original or explicit transfer limitation while retaining
+the operation's status and other metadata. See
 [history credential fields](file-transfers.md#configuration-history).
 
 Content reads expose typed configuration and content under the bounded upstream

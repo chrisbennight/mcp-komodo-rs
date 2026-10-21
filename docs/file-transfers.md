@@ -53,8 +53,10 @@ Compose, and commands remain available. Custom/Ntfy text has no keyword or
 query-name scan.
 
 Both documents of every selected record are parsed before publishing files;
-only the selected page publishes originals. Invalid TOML returns a fixed error
-and numeric location without echoing bytes. Missing native support or capacity
+only the selected page publishes originals. Invalid TOML leaves operation
+metadata available and reports `formatError` with a fixed message and numeric
+location. Its `toml` is empty because no safe inline projection is available;
+the exact unparsed original is file-only. Missing native support or capacity
 sets `originalFileUnavailable`: ordinary facts remain available and credentials
 stay file-only. Core may retain credentials in configuration and history.
 

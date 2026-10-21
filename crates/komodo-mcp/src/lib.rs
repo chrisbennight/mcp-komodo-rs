@@ -1840,7 +1840,7 @@ impl KomodoMcp {
             .skip(usize::from(input.offset))
             .take(input.limit)
             .map(history::PreparedOperation::parse)
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Vec<_>>();
         let items = prepared
             .into_iter()
             .map(|operation| operation.publish(self))
@@ -1874,7 +1874,7 @@ impl KomodoMcp {
             .update(&input.operation_id)
             .await
             .map_err(|error| self.operation_lookup_error(error))?;
-        structured(self.normalize_history_operation(item)?)
+        structured(self.normalize_history_operation(item))
     }
 
     async fn operation_logs_read(
@@ -3519,16 +3519,7 @@ mod tests {
                 }
                 if page == 4 {
                     return Ok(OperationPage {
-                        operations: vec![
-                            history_operation(),
-                            OperationItem {
-                                current_toml: Some(
-                                    "[[stack]]\n[stack.config]\nwebhook_secret = 'unterminated"
-                                        .into(),
-                                ),
-                                ..Default::default()
-                            },
-                        ],
+                        operations: vec![history_operation(), malformed_history_operation()],
                         next_page: None,
                     });
                 }
@@ -3570,6 +3561,8 @@ mod tests {
                     })
                 } else if operation_id == "history-document" {
                     Ok(history_operation())
+                } else if operation_id == "malformed-history" {
+                    Ok(malformed_history_operation())
                 } else {
                     Err(ApiError::NotFound)
                 }
@@ -3787,6 +3780,14 @@ mod tests {
                 upload: std::sync::Mutex::new(Some(b"sentinel-file-token".to_vec())),
                 published: std::sync::Mutex::new(Vec::new()),
             }
+        }
+    }
+
+    fn malformed_history_operation() -> OperationItem {
+        OperationItem {
+            id: "malformed-history".into(),
+            current_toml: Some("[[stack]]\n[stack.config]\nwebhook_secret = 'unterminated".into()),
+            ..history_operation()
         }
     }
 
@@ -5950,19 +5951,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_selected_history_batch_publishes_no_unreachable_files() {
+    async fn malformed_history_keeps_search_results_and_native_originals_available() {
         let files = Arc::new(TestCredentialFiles::default());
         let handler = KomodoMcp::read_only(Arc::new(FakeApi::default()))
             .with_credential_files("fixture-owner".into(), files.clone());
-        let error = handler
+        let output = handler
             .dispatch(
                 &CallToolRequestParams::new("operations.search")
                     .with_arguments(arguments(&json!({"page":4,"limit":2}))),
             )
             .await
-            .unwrap_err();
-        assert_eq!(error.message, "Core history document is not valid TOML");
-        assert!(files.published.lock().unwrap().is_empty());
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(output["items"][0]["outcome"], "succeeded");
+        let malformed = &output["items"][1];
+        assert_eq!(malformed["id"], "malformed-history");
+        assert_eq!(malformed["outcome"], "succeeded");
+        assert_eq!(malformed["currentConfiguration"]["toml"], "");
+        assert_eq!(
+            malformed["currentConfiguration"]["formatError"]["message"],
+            "Core history document is not valid TOML"
+        );
+        assert!(malformed["currentConfiguration"]["originalFile"].is_object());
+        let originals = files.published.lock().unwrap();
+        assert_eq!(originals.len(), 2);
+        assert_eq!(
+            originals[1],
+            b"[[stack]]\n[stack.config]\nwebhook_secret = 'unterminated"
+        );
+        assert!(!output.to_string().contains("unterminated"));
+    }
+
+    #[tokio::test]
+    async fn malformed_history_does_not_block_status_without_native_files() {
+        let output = KomodoMcp::read_only(Arc::new(FakeApi::default()))
+            .dispatch(
+                &CallToolRequestParams::new("operations.status")
+                    .with_arguments(arguments(&json!({"operation_id":"malformed-history"}))),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(output["outcome"], "succeeded");
+        assert_eq!(output["success"], true);
+        assert_eq!(output["currentConfiguration"]["toml"], "");
+        assert!(output["currentConfiguration"]["formatError"]["byteRange"].is_object());
+        assert_eq!(
+            output["currentConfiguration"]["originalFileUnavailable"],
+            "native file transfer required"
+        );
+        assert!(!output.to_string().contains("unterminated"));
     }
 
     #[tokio::test]
