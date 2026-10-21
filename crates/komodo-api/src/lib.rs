@@ -3,7 +3,13 @@
 pub mod errors;
 pub mod networks;
 
-use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use reqwest::{Client as HttpClient, redirect::Policy};
 use schemars::JsonSchema;
@@ -17,6 +23,7 @@ pub mod stacks;
 
 const MAXIMUM_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAXIMUM_TIMEOUT: Duration = Duration::from_mins(2);
+const NETWORK_VERSION_CACHE_TTL: Duration = Duration::from_mins(1);
 
 /// Credentials used for one least-privileged Komodo service user.
 #[derive(Clone)]
@@ -666,6 +673,12 @@ pub struct Client {
     http: HttpClient,
     base_url: Url,
     credentials: Arc<Credentials>,
+    network_version: Arc<tokio::sync::Mutex<Option<CachedNetworkVersion>>>,
+}
+
+struct CachedNetworkVersion {
+    current_names: bool,
+    expires_at: Instant,
 }
 
 impl fmt::Debug for Client {
@@ -703,6 +716,7 @@ impl Client {
             http,
             base_url,
             credentials: Arc::new(credentials),
+            network_version: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -710,6 +724,20 @@ impl Client {
         // Local search and selector resolution require the complete visible inventory.
         self.post("read", variant, json!({ "query": {}, "limit": 0 }), true)
             .await
+    }
+
+    async fn current_network_names(&self) -> Result<bool, ApiError> {
+        let mut cached = self.network_version.lock().await;
+        if let Some(version) = cached.as_ref().filter(|v| v.expires_at > Instant::now()) {
+            return Ok(version.current_names);
+        }
+        let current_names = networks::uses_current_names(&self.version().await?)
+            .ok_or(ApiError::IncompatibleResponse)?;
+        *cached = Some(CachedNetworkVersion {
+            current_names,
+            expires_at: Instant::now() + NETWORK_VERSION_CACHE_TTL,
+        });
+        Ok(current_names)
     }
 
     async fn post<T: DeserializeOwned>(
@@ -827,10 +855,10 @@ impl KomodoApi for Client {
 
     fn networks<'a>(&'a self, server: &'a str) -> ApiFuture<'a, Vec<networks::NetworkListItem>> {
         Box::pin(async move {
-            let variant = match networks::uses_current_names(&self.version().await?) {
-                Some(true) => "ListNetworks",
-                Some(false) => "ListDockerNetworks",
-                None => return Err(ApiError::IncompatibleResponse),
+            let variant = if self.current_network_names().await? {
+                "ListNetworks"
+            } else {
+                "ListDockerNetworks"
             };
             self.post("read", variant, json!({"server":server}), true)
                 .await
@@ -843,10 +871,10 @@ impl KomodoApi for Client {
         network: &'a str,
     ) -> ApiFuture<'a, networks::Network> {
         Box::pin(async move {
-            let variant = match networks::uses_current_names(&self.version().await?) {
-                Some(true) => "InspectNetwork",
-                Some(false) => "InspectDockerNetwork",
-                None => return Err(ApiError::IncompatibleResponse),
+            let variant = if self.current_network_names().await? {
+                "InspectNetwork"
+            } else {
+                "InspectDockerNetwork"
             };
             self.post(
                 "read",
