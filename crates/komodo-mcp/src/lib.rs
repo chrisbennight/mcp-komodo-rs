@@ -327,7 +327,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::OperationsSearch,
         "operations.search",
-        "Search one bounded operation page with resource correlation, initiating user, version, operation-specific data, and configuration history reported by Core. Ordinary history remains inline; explicit credential fields use native original files.",
+        "Search one bounded operation page, optionally filtering by exact resource target, operation kind, normalized outcome, and start-time range. Retains correlation, initiating user, version, operation-specific data, and configuration history. Ordinary history remains inline; explicit credential fields use native original files.",
     ),
     read_spec(
         ToolKind::OperationsStatus,
@@ -461,6 +461,9 @@ struct EmptyInput {}
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SearchInput {
+    /// Detail retains all supported facts; summary omits the nested Core resource.
+    #[serde(default)]
+    projection: Projection,
     /// Zero-based Core inventory page. Follow nextPage after exhausting nextOffset.
     #[serde(default)]
     page: u32,
@@ -480,6 +483,26 @@ struct SearchInput {
 
 const fn default_limit() -> usize {
     20
+}
+
+/// Caller-selected response detail; omission preserves existing detailed results.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Projection {
+    Summary,
+    #[default]
+    Detail,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StatusInput {
+    /// Exact Komodo resource name or id, 1 to 128 UTF-8 bytes without controls.
+    #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
+    selector: String,
+    /// Detail retains all supported facts; summary omits the nested Core resource.
+    #[serde(default)]
+    projection: Projection,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -753,6 +776,9 @@ enum WebhookSecretInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct OperationsSearchInput {
+    /// Detail includes configuration history and operation-specific data; summary omits them.
+    #[serde(default)]
+    projection: Projection,
     /// Offset within this page's filtered results; reset to zero when advancing page.
     #[serde(default)]
     #[schemars(range(max = MAX_OFFSET))]
@@ -769,11 +795,101 @@ struct OperationsSearchInput {
     #[serde(default = "default_limit")]
     #[schemars(range(min = 1))]
     limit: usize,
+    /// Optional exact resource, operation, outcome, and start-time filters applied upstream.
+    filter: Option<OperationSearchFilter>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct OperationSearchFilter {
+    /// Resource type and stable id, not a resource name or caller identity.
+    target: Option<OperationTargetFilter>,
+    /// Exact Core operation kind, 1 to 128 UTF-8 bytes without controls.
+    #[schemars(
+        length(min = 1, max = 128),
+        pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$")
+    )]
+    operation: Option<String>,
+    /// Normalized outcome; pending states never match completed failure.
+    outcome: Option<OperationOutcome>,
+    /// Inclusive start timestamp in Unix milliseconds.
+    #[schemars(range(min = 0))]
+    started_after: Option<i64>,
+    /// Exclusive start timestamp in Unix milliseconds; must exceed `started_after`.
+    #[schemars(range(min = 0))]
+    started_before: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct OperationTargetFilter {
+    /// Exact Core resource type, including supported future kinds.
+    #[schemars(
+        length(min = 1, max = 128),
+        pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$")
+    )]
+    kind: String,
+    /// Exact stable resource id, 1 to 128 UTF-8 bytes without controls.
+    #[schemars(
+        length(min = 1, max = 128),
+        pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$")
+    )]
+    id: String,
+}
+
+impl OperationSearchFilter {
+    fn validated_query(&self) -> Result<komodo_api::operations::OperationQuery, McpError> {
+        use komodo_api::operations::{OperationQuery, UpdateStatusFilter};
+        if let Some(target) = &self.target {
+            validate_selector(&target.kind)?;
+            validate_selector(&target.id)?;
+        }
+        if let Some(operation) = &self.operation {
+            validate_selector(operation)?;
+        }
+        if self.started_after.is_some_and(|value| value < 0)
+            || self.started_before.is_some_and(|value| value < 0)
+            || self
+                .started_after
+                .zip(self.started_before)
+                .is_some_and(|(after, before)| after >= before)
+        {
+            return Err(McpError::invalid_params(
+                "operation timestamps must be nonnegative and started_after must precede started_before",
+                None,
+            ));
+        }
+        let (status, success) = match self.outcome {
+            None => (None, None),
+            Some(OperationOutcome::Accepted) => (Some(UpdateStatusFilter::Queued), None),
+            Some(OperationOutcome::Running) => (Some(UpdateStatusFilter::InProgress), None),
+            Some(OperationOutcome::Succeeded) => (Some(UpdateStatusFilter::Complete), Some(true)),
+            Some(OperationOutcome::Failed) => (Some(UpdateStatusFilter::Complete), Some(false)),
+            Some(OperationOutcome::Unknown) => (Some(UpdateStatusFilter::Other), None),
+        };
+        Ok(OperationQuery {
+            target: self
+                .target
+                .as_ref()
+                .map(|target| komodo_api::OperationTarget {
+                    kind: target.kind.clone(),
+                    id: target.id.clone(),
+                }),
+            operation: self.operation.clone(),
+            status,
+            success,
+            started_after: self.started_after,
+            started_before: self.started_before,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct OperationStatusInput {
+    /// Detail includes configuration history and operation-specific data; summary omits them.
+    #[serde(default)]
+    projection: Projection,
     /// Exact operation id returned by `operations.search`.
     /// Must be 1 to 128 UTF-8 bytes with no control characters.
     #[schemars(length(min = 1, max = MAX_SELECTOR_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
@@ -811,7 +927,8 @@ struct ServerStatus {
     /// Periphery version when Komodo reports one.
     version: Option<String>,
     /// Complete typed list facts reported by Core, including addresses and public keys.
-    resource: ResourceListItem<ServerInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<ResourceListItem<ServerInfo>>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -832,7 +949,8 @@ struct StackStatus {
     /// Whether the Compose project is unexpectedly absent on the target.
     project_missing: bool,
     /// Complete typed list facts reported by Core, including source and deployed hashes.
-    resource: ResourceListItem<StackInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<ResourceListItem<StackInfo>>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -849,7 +967,8 @@ struct DeploymentStatus {
     /// Whether Komodo reports a newer image for the configured tag.
     update_available: bool,
     /// Complete typed list facts reported by Core, including image and placement.
-    resource: ResourceListItem<DeploymentInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<ResourceListItem<DeploymentInfo>>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -866,7 +985,8 @@ struct BuildStatus {
     /// Unix timestamp in milliseconds of the most recent build.
     last_built_at: i64,
     /// Complete typed list facts reported by Core, including version and repository source.
-    resource: ResourceListItem<BuildInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<ResourceListItem<BuildInfo>>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -885,16 +1005,16 @@ struct RepoStatus {
     /// Unix timestamp in milliseconds of the most recent build.
     last_built_at: i64,
     /// Complete typed list facts reported by Core, including branch and commit provenance.
-    resource: ResourceListItem<RepoInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<ResourceListItem<RepoInfo>>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct OperationStatus {
-    /// Previous configuration text and any native original credential document.
-    previous_configuration: Option<history::HistoryDocument>,
-    /// Current configuration text and any native original credential document.
-    current_configuration: Option<history::HistoryDocument>,
+    /// Detail-only fields, omitted together when summary is selected.
+    #[serde(flatten)]
+    details: Option<OperationDetails>,
     /// Stable Komodo operation id.
     id: String,
     /// Operation kind reported by Core, including future kinds.
@@ -919,11 +1039,20 @@ struct OperationStatus {
     version: Option<ResourceVersion>,
     /// Commit associated with the operation.
     commit_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct OperationDetails {
+    /// Previous configuration text and any native original credential document.
+    previous_configuration: Option<history::HistoryDocument>,
+    /// Current configuration text and any native original credential document.
+    current_configuration: Option<history::HistoryDocument>,
     /// Operation-specific source data reported by Core.
     other_data: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 enum OperationOutcome {
     Accepted,
@@ -1462,7 +1591,13 @@ impl KomodoMcp {
             .await
             .map_err(|error| self.api_error(error))?;
         let next_page = page.next_page;
-        let output = search(page.items, &input, normalize_server)?;
+        let output = search(page.items, &input, |item| {
+            let mut status = normalize_server(item);
+            if input.projection == Projection::Summary {
+                status.resource = None;
+            }
+            status
+        })?;
         structured(ServerSearchOutput {
             items: output.items,
             next_page,
@@ -1475,7 +1610,7 @@ impl KomodoMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<SelectorInput>(params)?;
+        let input = parse::<StatusInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
             self.read
@@ -1485,7 +1620,11 @@ impl KomodoMcp {
                 .items,
             &input.selector,
         )?;
-        structured(normalize_server(item))
+        let mut status = normalize_server(item);
+        if input.projection == Projection::Summary {
+            status.resource = None;
+        }
+        structured(status)
     }
 
     async fn search_stacks(
@@ -1500,7 +1639,13 @@ impl KomodoMcp {
             .await
             .map_err(|error| self.api_error(error))?;
         let next_page = page.next_page;
-        let output = search(page.items, &input, normalize_stack)?;
+        let output = search(page.items, &input, |item| {
+            let mut status = normalize_stack(item);
+            if input.projection == Projection::Summary {
+                status.resource = None;
+            }
+            status
+        })?;
         structured(StackSearchOutput {
             items: output.items,
             next_page,
@@ -1513,7 +1658,7 @@ impl KomodoMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<SelectorInput>(params)?;
+        let input = parse::<StatusInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
             self.read
@@ -1523,7 +1668,11 @@ impl KomodoMcp {
                 .items,
             &input.selector,
         )?;
-        structured(normalize_stack(item))
+        let mut status = normalize_stack(item);
+        if input.projection == Projection::Summary {
+            status.resource = None;
+        }
+        structured(status)
     }
 
     async fn stack_diagnostics(
@@ -1726,7 +1875,13 @@ impl KomodoMcp {
             .await
             .map_err(|error| self.api_error(error))?;
         let next_page = page.next_page;
-        let output = search(page.items, &input, normalize_deployment)?;
+        let output = search(page.items, &input, |item| {
+            let mut status = normalize_deployment(item);
+            if input.projection == Projection::Summary {
+                status.resource = None;
+            }
+            status
+        })?;
         structured(DeploymentSearchOutput {
             items: output.items,
             next_page,
@@ -1739,7 +1894,7 @@ impl KomodoMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<SelectorInput>(params)?;
+        let input = parse::<StatusInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
             self.read
@@ -1749,7 +1904,11 @@ impl KomodoMcp {
                 .items,
             &input.selector,
         )?;
-        structured(normalize_deployment(item))
+        let mut status = normalize_deployment(item);
+        if input.projection == Projection::Summary {
+            status.resource = None;
+        }
+        structured(status)
     }
 
     async fn search_builds(
@@ -1764,7 +1923,13 @@ impl KomodoMcp {
             .await
             .map_err(|error| self.api_error(error))?;
         let next_page = page.next_page;
-        let output = search(page.items, &input, normalize_build)?;
+        let output = search(page.items, &input, |item| {
+            let mut status = normalize_build(item);
+            if input.projection == Projection::Summary {
+                status.resource = None;
+            }
+            status
+        })?;
         structured(BuildSearchOutput {
             items: output.items,
             next_page,
@@ -1777,7 +1942,7 @@ impl KomodoMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<SelectorInput>(params)?;
+        let input = parse::<StatusInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
             self.read
@@ -1787,7 +1952,11 @@ impl KomodoMcp {
                 .items,
             &input.selector,
         )?;
-        structured(normalize_build(item))
+        let mut status = normalize_build(item);
+        if input.projection == Projection::Summary {
+            status.resource = None;
+        }
+        structured(status)
     }
 
     async fn search_repos(
@@ -1802,7 +1971,13 @@ impl KomodoMcp {
             .await
             .map_err(|error| self.api_error(error))?;
         let next_page = page.next_page;
-        let output = search(page.items, &input, normalize_repo)?;
+        let output = search(page.items, &input, |item| {
+            let mut status = normalize_repo(item);
+            if input.projection == Projection::Summary {
+                status.resource = None;
+            }
+            status
+        })?;
         structured(RepoSearchOutput {
             items: output.items,
             next_page,
@@ -1815,7 +1990,7 @@ impl KomodoMcp {
         &self,
         params: &CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let input = parse::<SelectorInput>(params)?;
+        let input = parse::<StatusInput>(params)?;
         validate_selector(&input.selector)?;
         let item = select(
             self.read
@@ -1825,7 +2000,11 @@ impl KomodoMcp {
                 .items,
             &input.selector,
         )?;
-        structured(normalize_repo(item))
+        let mut status = normalize_repo(item);
+        if input.projection == Projection::Summary {
+            status.resource = None;
+        }
+        structured(status)
     }
 
     async fn search_operations(
@@ -1841,9 +2020,15 @@ impl KomodoMcp {
             ));
         }
         let query = validate_query(input.query.as_deref())?;
+        let filter = input
+            .filter
+            .as_ref()
+            .map(OperationSearchFilter::validated_query)
+            .transpose()?
+            .unwrap_or_default();
         let page = self
             .read
-            .operations(input.page)
+            .operations_query(input.page, &filter)
             .await
             .map_err(|error| self.api_error(error))?;
         let next_page = page.next_page;
@@ -1853,15 +2038,11 @@ impl KomodoMcp {
             .filter(|item| operation_matches(item, query.as_deref()))
             .collect::<Vec<_>>();
         let total = matches.len();
-        let prepared = matches
+        let items = matches
             .into_iter()
             .skip(usize::from(input.offset))
             .take(input.limit)
-            .map(history::PreparedOperation::parse)
-            .collect::<Vec<_>>();
-        let items = prepared
-            .into_iter()
-            .map(|operation| operation.publish(self))
+            .map(|operation| self.project_operation(operation, input.projection))
             .collect::<Vec<_>>();
         let consumed = usize::from(input.offset) + items.len();
         let next_offset = (consumed < total)
@@ -1892,7 +2073,7 @@ impl KomodoMcp {
             .update(&input.operation_id)
             .await
             .map_err(|error| self.operation_lookup_error(error))?;
-        structured(self.normalize_history_operation(item))
+        structured(self.project_operation(item, input.projection))
     }
 
     async fn operation_logs_read(
@@ -2276,7 +2457,7 @@ impl ToolSpec {
         match self.kind {
             ToolKind::SystemStatus => tool::<EmptyInput, SystemStatusOutput>(self),
             ToolKind::ServersSearch => tool::<SearchInput, ServerSearchOutput>(self),
-            ToolKind::ServersStatus => tool::<SelectorInput, ServerStatus>(self),
+            ToolKind::ServersStatus => tool::<StatusInput, ServerStatus>(self),
             ToolKind::ServersNetworksSearch => {
                 tool::<networks::SearchInput, networks::SearchOutput>(self)
             }
@@ -2284,7 +2465,7 @@ impl ToolSpec {
                 tool::<networks::ReadInput, networks::ReadOutput>(self)
             }
             ToolKind::StacksSearch => tool::<SearchInput, StackSearchOutput>(self),
-            ToolKind::StacksStatus => tool::<SelectorInput, StackStatus>(self),
+            ToolKind::StacksStatus => tool::<StatusInput, StackStatus>(self),
             ToolKind::StacksDiagnostics => tool::<CollectionReadInput, StackDiagnostics>(self),
             ToolKind::StacksConfigRead => tool::<CollectionReadInput, StackConfigView>(self),
             ToolKind::StacksComposeRead => tool::<ComposeReadInput, ComposeView>(self),
@@ -2294,11 +2475,11 @@ impl ToolSpec {
             ToolKind::StacksWebhookSecretRead => tool::<SelectorInput, WebhookSecretView>(self),
             ToolKind::StacksLogsTail => tool::<LogTailInput, LogTailView>(self),
             ToolKind::DeploymentsSearch => tool::<SearchInput, DeploymentSearchOutput>(self),
-            ToolKind::DeploymentsStatus => tool::<SelectorInput, DeploymentStatus>(self),
+            ToolKind::DeploymentsStatus => tool::<StatusInput, DeploymentStatus>(self),
             ToolKind::BuildsSearch => tool::<SearchInput, BuildSearchOutput>(self),
-            ToolKind::BuildsStatus => tool::<SelectorInput, BuildStatus>(self),
+            ToolKind::BuildsStatus => tool::<StatusInput, BuildStatus>(self),
             ToolKind::ReposSearch => tool::<SearchInput, RepoSearchOutput>(self),
-            ToolKind::ReposStatus => tool::<SelectorInput, RepoStatus>(self),
+            ToolKind::ReposStatus => tool::<StatusInput, RepoStatus>(self),
             ToolKind::OperationsSearch => {
                 tool::<OperationsSearchInput, OperationSearchOutput>(self)
             }
@@ -2515,7 +2696,7 @@ struct SearchPage<T> {
 fn search<I, O>(
     mut resources: Vec<ResourceListItem<I>>,
     input: &SearchInput,
-    normalize: fn(ResourceListItem<I>) -> O,
+    normalize: impl FnMut(ResourceListItem<I>) -> O,
 ) -> Result<SearchPage<O>, McpError> {
     let query = validate_search(input)?;
     resources.retain(|item| resource_matches(item, query.as_deref()));
@@ -2704,7 +2885,7 @@ fn normalize_server(item: ResourceListItem<ServerInfo>) -> ServerStatus {
         state: item.info.state.clone(),
         health: health.into(),
         version: item.info.version.clone(),
-        resource: item,
+        resource: Some(item),
     }
 }
 
@@ -2733,7 +2914,7 @@ fn normalize_stack(item: ResourceListItem<StackInfo>) -> StackStatus {
         service_count: item.info.services.len(),
         services_with_updates: updates,
         project_missing: item.info.project_missing,
-        resource: item,
+        resource: Some(item),
     }
 }
 
@@ -2953,7 +3134,7 @@ fn normalize_deployment(item: ResourceListItem<DeploymentInfo>) -> DeploymentSta
         state: item.info.state.clone(),
         health: health.into(),
         update_available: item.info.update_available,
-        resource: item,
+        resource: Some(item),
     }
 }
 
@@ -2970,7 +3151,7 @@ fn normalize_build(item: ResourceListItem<BuildInfo>) -> BuildStatus {
         state: item.info.state.clone(),
         health: health.into(),
         last_built_at: item.info.last_built_at,
-        resource: item,
+        resource: Some(item),
     }
 }
 
@@ -2988,15 +3169,18 @@ fn normalize_repo(item: ResourceListItem<RepoInfo>) -> RepoStatus {
         health: health.into(),
         last_pulled_at: item.info.last_pulled_at,
         last_built_at: item.info.last_built_at,
-        resource: item,
+        resource: Some(item),
     }
 }
 
 fn normalize_operation(item: OperationItem) -> OperationStatus {
     let (outcome, success) = operation_outcome(&item.status, item.success);
     OperationStatus {
-        previous_configuration: None,
-        current_configuration: None,
+        details: Some(OperationDetails {
+            previous_configuration: None,
+            current_configuration: None,
+            other_data: item.other_data,
+        }),
         id: item.id,
         operation: item.operation,
         start_ts: item.start_ts,
@@ -3012,7 +3196,6 @@ fn normalize_operation(item: OperationItem) -> OperationStatus {
         end_ts: item.end_ts,
         version: item.version,
         commit_hash: item.commit_hash,
-        other_data: item.other_data,
     }
 }
 
@@ -3581,6 +3764,35 @@ mod tests {
                     return Ok(OperationPage {
                         operations: vec![history_operation(), malformed_history_operation()],
                         next_page: None,
+                    });
+                }
+                if page == 5 {
+                    return Ok(OperationPage {
+                        operations: [
+                            ("Queued", false, "Stack", "DeployStack"),
+                            ("InProgress", false, "Stack", "DeployStack"),
+                            ("Complete", true, "Stack", "DeployStack"),
+                            ("Complete", false, "Stack", "DeployStack"),
+                            ("FutureState", true, "FutureResource", "FutureOperation"),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        .map(
+                            |(index, (status, success, kind, operation))| OperationItem {
+                                id: format!("filtered-{index}"),
+                                operation: operation.into(),
+                                status: status.into(),
+                                success,
+                                start_ts: 10 * (i64::try_from(index).unwrap() + 1),
+                                target: Some(komodo_api::OperationTarget {
+                                    kind: kind.into(),
+                                    id: "target-id".into(),
+                                }),
+                                ..Default::default()
+                            },
+                        )
+                        .collect(),
+                        next_page: Some(6),
                     });
                 }
                 Ok(OperationPage {
@@ -4888,6 +5100,171 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resource_projections_keep_default_details_and_summary_health() {
+        for (prefix, selector) in [
+            ("servers", "server-1"),
+            ("stacks", "stack-1"),
+            ("deployments", "deployment-1"),
+            ("builds", "build-1"),
+            ("repos", "repo-1"),
+        ] {
+            for (suffix, input) in [
+                ("search", json!({"limit":1})),
+                ("status", json!({"selector":selector})),
+            ] {
+                let name = format!("{prefix}.{suffix}");
+                let tool = TOOL_REGISTRY
+                    .iter()
+                    .find(|spec| spec.name == name)
+                    .unwrap()
+                    .catalog_tool();
+                let mut views = Vec::new();
+                for projection in [None, Some("detail"), Some("summary")] {
+                    let mut input = input.clone();
+                    if let Some(projection) = projection {
+                        input["projection"] = json!(projection);
+                    }
+                    assert!(validates(
+                        &Value::Object((*tool.input_schema).clone()),
+                        &input
+                    ));
+                    let output = handler()
+                        .dispatch(
+                            &CallToolRequestParams::new(name.clone())
+                                .with_arguments(arguments(&input)),
+                        )
+                        .await
+                        .unwrap()
+                        .structured_content
+                        .unwrap();
+                    assert!(validates(
+                        &Value::Object((**tool.output_schema.as_ref().unwrap()).clone()),
+                        &output
+                    ));
+                    views.push(output);
+                }
+                assert_eq!(views[0], views[1], "omission preserves detail for {name}");
+                let mut expected = views[1].clone();
+                if suffix == "search" {
+                    for item in expected["items"].as_array_mut().unwrap() {
+                        assert!(item.as_object_mut().unwrap().remove("resource").is_some());
+                    }
+                } else {
+                    assert!(
+                        expected
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("resource")
+                            .is_some()
+                    );
+                }
+                assert_eq!(
+                    views[2], expected,
+                    "summary preserves normalized facts and continuation for {name}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn operation_summaries_omit_history_without_publishing_native_files() {
+        for (name, input) in [
+            ("operations.search", json!({"page":3})),
+            (
+                "operations.status",
+                json!({"operation_id":"history-document"}),
+            ),
+            (
+                "operations.status",
+                json!({"operation_id":"malformed-history"}),
+            ),
+        ] {
+            let files = Arc::new(TestCredentialFiles::default());
+            let handler = KomodoMcp::read_only(Arc::new(FakeApi::default()))
+                .with_credential_files("fixture-owner".into(), files.clone());
+            let tool = TOOL_REGISTRY
+                .iter()
+                .find(|spec| spec.name == name)
+                .unwrap()
+                .catalog_tool();
+            let mut views = Vec::new();
+            for projection in [Some("summary"), Some("detail"), None] {
+                let mut input = input.clone();
+                if let Some(projection) = projection {
+                    input["projection"] = json!(projection);
+                }
+                let output = handler
+                    .dispatch(&CallToolRequestParams::new(name).with_arguments(arguments(&input)))
+                    .await
+                    .unwrap()
+                    .structured_content
+                    .unwrap();
+                assert!(validates(
+                    &Value::Object((**tool.output_schema.as_ref().unwrap()).clone()),
+                    &output
+                ));
+                if projection == Some("summary") {
+                    assert!(files.published.lock().unwrap().is_empty());
+                }
+                views.push(output);
+            }
+            assert_eq!(views[1], views[2], "default detail preserves history");
+            let mut expected = views[1].clone();
+            let records = if name == "operations.search" {
+                expected["items"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .collect::<Vec<_>>()
+            } else {
+                vec![&mut expected]
+            };
+            for item in records {
+                for key in ["previousConfiguration", "currentConfiguration", "otherData"] {
+                    assert!(item.as_object_mut().unwrap().remove(key).is_some());
+                }
+            }
+            assert_eq!(views[0], expected);
+            assert!(views[0].to_string().len() < views[1].to_string().len());
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_projections_fail_before_resource_reads() {
+        let read = Arc::new(FakeApi::default());
+        let handler = KomodoMcp::read_only(read.clone());
+        for (name, mut input) in [
+            ("stacks.search", json!({})),
+            ("stacks.status", json!({"selector":"stack-1"})),
+            ("operations.search", json!({})),
+            ("operations.status", json!({"operation_id":"operation-1"})),
+        ] {
+            input["projection"] = json!("unsupported");
+            assert_eq!(
+                handler
+                    .dispatch(&CallToolRequestParams::new(name).with_arguments(arguments(&input)))
+                    .await
+                    .unwrap_err()
+                    .code,
+                rmcp::model::ErrorCode::INVALID_PARAMS
+            );
+        }
+        assert_eq!(
+            read.read_attempts.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        let mutation = TOOL_REGISTRY
+            .iter()
+            .find(|spec| spec.name == "stacks.stop")
+            .unwrap()
+            .catalog_tool();
+        assert!(!validates(
+            &Value::Object((*mutation.input_schema).clone()),
+            &json!({"selector":"stack-1","projection":"summary"})
+        ));
+    }
+
+    #[tokio::test]
     async fn resource_pages_keep_local_offsets_and_empty_page_continuation() {
         for (input, ids, offset, page) in [
             (
@@ -4945,6 +5322,75 @@ mod tests {
             .structured_content
             .unwrap();
         assert_eq!(output["id"], "paged-stack");
+    }
+
+    #[tokio::test]
+    async fn typed_operation_filters_select_target_outcome_and_time_without_losing_continuation() {
+        for (filter, expected) in [
+            (
+                json!({"target":{"kind":"Stack","id":"target-id"},"operation":"DeployStack","outcome":"succeeded","started_after":25,"started_before":35}),
+                "filtered-2",
+            ),
+            (json!({"outcome":"failed"}), "filtered-3"),
+            (json!({"outcome":"accepted"}), "filtered-0"),
+            (json!({"outcome":"running"}), "filtered-1"),
+            (
+                json!({"target":{"kind":"FutureResource","id":"target-id"},"outcome":"unknown"}),
+                "filtered-4",
+            ),
+        ] {
+            let output = handler()
+                .dispatch(
+                    &CallToolRequestParams::new("operations.search")
+                        .with_arguments(arguments(&json!({"page":5,"filter":filter}))),
+                )
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(output["items"].as_array().unwrap().len(), 1);
+            assert_eq!(output["items"][0]["id"], expected);
+            assert_eq!(output["nextPage"], 6);
+        }
+        let empty = handler()
+            .dispatch(
+                &CallToolRequestParams::new("operations.search").with_arguments(arguments(
+                    &json!({"page":5,"filter":{"target":{"kind":"Stack","id":"another-id"}}}),
+                )),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(empty["items"], json!([]));
+        assert_eq!(empty["nextPage"], 6);
+    }
+
+    #[tokio::test]
+    async fn invalid_operation_filters_make_no_upstream_reads() {
+        let read = Arc::new(FakeApi::default());
+        let handler = KomodoMcp::read_only(read.clone());
+        for filter in [
+            json!({"target":{"kind":"Stack","id":""}}),
+            json!({"operation":"x".repeat(129)}),
+            json!({"started_after":-1}),
+            json!({"started_after":20,"started_before":10}),
+            json!({"outcome":"unknown-outcome"}),
+            json!({"query":{"$where":"untrusted"}}),
+        ] {
+            let error = handler
+                .dispatch(
+                    &CallToolRequestParams::new("operations.search")
+                        .with_arguments(arguments(&json!({"filter":filter}))),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        }
+        assert_eq!(
+            read.read_attempts.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 
     #[tokio::test]
@@ -5179,7 +5625,7 @@ mod tests {
                     state: state.into(),
                     health: health.into(),
                     version: None,
-                    resource: resource(
+                    resource: Some(resource(
                         "server",
                         "server",
                         ServerInfo {
@@ -5187,7 +5633,7 @@ mod tests {
                             version: None,
                             ..Default::default()
                         }
-                    ),
+                    )),
                 }
             );
         }
@@ -5331,6 +5777,7 @@ mod tests {
             let page = search(
                 resources(),
                 &SearchInput {
+                    projection: super::Projection::Detail,
                     page: 0,
                     query: None,
                     offset: 0,
@@ -5372,6 +5819,7 @@ mod tests {
         let page = search(
             resources.clone(),
             &SearchInput {
+                projection: super::Projection::Detail,
                 page: 0,
                 query: None,
                 offset: 10_000,
@@ -5386,6 +5834,7 @@ mod tests {
         let page = search(
             resources,
             &SearchInput {
+                projection: super::Projection::Detail,
                 page: 0,
                 query: None,
                 offset: 9_950,
@@ -5501,6 +5950,7 @@ mod tests {
         let first = search(
             resources.clone(),
             &SearchInput {
+                projection: super::Projection::Detail,
                 page: 0,
                 query: None,
                 offset: 0,
@@ -5514,6 +5964,7 @@ mod tests {
         let second = search(
             resources.clone(),
             &SearchInput {
+                projection: super::Projection::Detail,
                 page: 0,
                 query: None,
                 offset: 1,
@@ -5527,6 +5978,7 @@ mod tests {
         let id_match = search(
             resources.clone(),
             &SearchInput {
+                projection: super::Projection::Detail,
                 page: 0,
                 query: Some("RESOURCE-Z".into()),
                 offset: 0,
@@ -5553,6 +6005,7 @@ mod tests {
             search(
                 resources.clone(),
                 &SearchInput {
+                    projection: super::Projection::Detail,
                     page: 0,
                     query: None,
                     offset: 10_000,
@@ -5568,6 +6021,7 @@ mod tests {
                 search(
                     resources.clone(),
                     &SearchInput {
+                        projection: super::Projection::Detail,
                         page: 0,
                         query: None,
                         offset,

@@ -23,6 +23,23 @@ expiration, and audit rules; a URI alone is not an authorization mechanism.
 This server does not create gateway artifacts or promise their retention.
 Its typed content reads remain available with bounded upstream responses.
 
+## Choose summary or detail
+
+Resource and operation search/status tools accept `projection: "summary"` for
+routine discovery and health checks. It omits the nested Core resource record
+or operation configuration history and operation-specific data while keeping
+normalized status, correlation, and continuation. For example, search with
+`{"query":"gateway","projection":"summary"}`, follow `nextOffset` and
+`nextPage`, then inspect a selected stable id with
+`{"selector":"resource-id","projection":"detail"}`. Operation status uses
+`operation_id` in place of `selector`.
+
+Detail is the default, so existing callers retain their fields. Operation
+summaries do not publish native history files; detail still provides their
+governed transfer path. Summary reduces serialized output and history
+processing, but the upstream response remains subject to its existing body
+limit. Neither projection changes access policy.
+
 ## Reproduce local measurements
 
 Build the desired revision and use a temporary environment with the official

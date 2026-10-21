@@ -8,7 +8,7 @@ use toml_edit::{DocumentMut, Item, TableLike};
 use url::Url;
 use zeroize::Zeroizing;
 
-use super::{KomodoMcp, OperationStatus, files::FileValue, normalize_operation};
+use super::{KomodoMcp, OperationStatus, Projection, files::FileValue, normalize_operation};
 
 /// Ordinary history text with the original credential-bearing document available natively.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -138,10 +138,14 @@ impl PreparedOperation {
 
     pub(super) fn publish(self, handler: &KomodoMcp) -> OperationStatus {
         let mut status = normalize_operation(self.item);
-        status.previous_configuration = self
+        let details = status
+            .details
+            .as_mut()
+            .expect("detail normalization includes its fields");
+        details.previous_configuration = self
             .previous
             .map(|doc| doc.publish(handler, "operation-before.toml"));
-        status.current_configuration = self
+        details.current_configuration = self
             .current
             .map(|doc| doc.publish(handler, "operation-after.toml"));
         status
@@ -149,8 +153,18 @@ impl PreparedOperation {
 }
 
 impl KomodoMcp {
-    pub(super) fn normalize_history_operation(&self, item: OperationItem) -> OperationStatus {
-        PreparedOperation::parse(item).publish(self)
+    pub(super) fn project_operation(
+        &self,
+        item: OperationItem,
+        projection: Projection,
+    ) -> OperationStatus {
+        if projection == Projection::Summary {
+            let mut status = normalize_operation(item);
+            status.details = None;
+            status
+        } else {
+            PreparedOperation::parse(item).publish(self)
+        }
     }
 }
 

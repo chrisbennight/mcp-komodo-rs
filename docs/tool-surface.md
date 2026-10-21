@@ -91,13 +91,26 @@ approval records. See [the decisions](../DECISIONS.md) and the contracts below.
 
 ## Read contract
 
-Resource search and status tools retain their normalized health summaries and
-include `resource`, a typed Core list record with id, type, name, template flag,
+Resource search and status tools retain their normalized health summaries and,
+by default, include `resource`, a typed Core list record with id, type, name, template flag,
 tags, and resource-specific `info`. Fields inside `resource` use Core's field
 names. Server facts include network addresses, public keys, region, alerts, and
 available statistics. Stack, deployment, build, and repository facts include
 placement, image, source, branch, and commit provenance. Fields introduced in
 newer Core releases are optional when older versions do not report them.
+
+Resource search/status and operation search/status accept
+`projection: "summary" | "detail"`. Omitting it retains `detail` and the existing
+fields. Resource summaries omit only the nested `resource` record, preserving
+normalized health and status facts and all search continuation. Operation
+summaries omit `previousConfiguration`, `currentConfiguration`, and `otherData`;
+they retain outcome, target, initiating identity, timestamps, and version/commit
+metadata. Summary operation reads do not parse history or publish native history
+files. Request detail by stable id to retrieve the omitted facts and governed
+original files. Projection is a caller-selected response size, not disclosure
+policy; it does not change gateway authorization or the upstream body bound.
+Content reads, diagnostics, networks, and mutation receipts keep their existing
+contracts.
 
 `servers.networks.search` selects one server by name or id and returns its typed
 Docker network inventory. An optional `query` matches network names or ids,
@@ -152,6 +165,18 @@ release). Both return id, operation kind, start timestamp, raw status, explicit
 Accepted/running/unknown operations have `success: null`; only completed
 operations report true or false. A target identifies a resource, not the caller
 that submitted an operation. See [reconciliation](reconciliation.md).
+
+`operations.search` accepts an optional `filter` with an exact `target`
+(`kind` and stable `id`), exact `operation` kind, normalized `outcome`, and
+`started_after`/`started_before` timestamps in Unix milliseconds. The lower
+timestamp is inclusive and the upper timestamp is exclusive; an explicitly
+bounded interval must have its lower bound before its upper bound. Pending
+outcomes remain distinct from completed failure, and `unknown` matches states
+outside the supported queued, in-progress, and complete states. These filters
+are combined upstream before pagination. The existing `query` substring is
+then applied locally within that filtered page. Follow `nextPage` even when
+the current page has no local matches. Raw query operators are not accepted.
+
 `stacks.diagnostics` adds Docker status text, missing
 Compose file paths, per-service image and update signals, and deploy-vs-latest
 drift. Operation search and status preserve initiating user identity, version,
