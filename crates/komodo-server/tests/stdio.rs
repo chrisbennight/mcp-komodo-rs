@@ -45,7 +45,7 @@ async fn stdio_reads_with_log_filter(filter: &str, profile: &str) {
         .and(path("/read"))
         .and(body_partial_json(json!({"type":"GetVersion"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":"2.1.2"})))
-        .expect(1)
+        .expect(2)
         .mount(&upstream)
         .await;
     Mock::given(method("POST"))

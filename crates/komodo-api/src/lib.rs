@@ -1,6 +1,7 @@
 //! Bounded, typed access to the Komodo Core API.
 
 pub mod errors;
+pub mod inventory;
 pub mod networks;
 pub mod operations;
 
@@ -24,7 +25,7 @@ pub mod stacks;
 
 const MAXIMUM_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAXIMUM_TIMEOUT: Duration = Duration::from_mins(2);
-const NETWORK_VERSION_CACHE_TTL: Duration = Duration::from_mins(1);
+const CORE_VERSION_CACHE_TTL: Duration = Duration::from_mins(1);
 
 /// Credentials used for one least-privileged Komodo service user.
 #[derive(Clone)]
@@ -92,6 +93,12 @@ pub enum ApiError {
     IncompatibleResponse,
     #[error("Komodo response exceeded the configured bound")]
     ResponseTooLarge,
+    #[error("inventory pagination requires Komodo Core 2.3 or later; use page zero on older Core")]
+    InventoryPaginationUnsupported,
+    #[error(
+        "resource lookup exceeded its bounded search; use the exact resource id or check Core reachability"
+    )]
+    InventorySelectorTooBroad,
 }
 
 impl ApiError {
@@ -647,6 +654,44 @@ pub trait KomodoApi: Send + Sync {
     fn deployments(&self) -> ApiFuture<'_, Vec<ResourceListItem<DeploymentInfo>>>;
     fn builds(&self) -> ApiFuture<'_, Vec<ResourceListItem<BuildInfo>>>;
     fn repos(&self) -> ApiFuture<'_, Vec<ResourceListItem<RepoInfo>>>;
+    fn servers_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<ServerInfo>> {
+        Box::pin(
+            async move { inventory::InventoryPage::from_legacy(self.servers().await?, request) },
+        )
+    }
+    fn stacks_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<StackInfo>> {
+        Box::pin(
+            async move { inventory::InventoryPage::from_legacy(self.stacks().await?, request) },
+        )
+    }
+    fn deployments_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<DeploymentInfo>> {
+        Box::pin(async move {
+            inventory::InventoryPage::from_legacy(self.deployments().await?, request)
+        })
+    }
+    fn builds_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<BuildInfo>> {
+        Box::pin(
+            async move { inventory::InventoryPage::from_legacy(self.builds().await?, request) },
+        )
+    }
+    fn repos_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<RepoInfo>> {
+        Box::pin(async move { inventory::InventoryPage::from_legacy(self.repos().await?, request) })
+    }
     fn operations(&self, page: u32) -> ApiFuture<'_, OperationPage>;
     fn operations_query<'a>(
         &'a self,
@@ -685,11 +730,11 @@ pub struct Client {
     http: HttpClient,
     base_url: Url,
     credentials: Arc<Credentials>,
-    network_version: Arc<tokio::sync::Mutex<Option<CachedNetworkVersion>>>,
+    core_version: Arc<tokio::sync::Mutex<Option<CachedCoreVersion>>>,
 }
 
-struct CachedNetworkVersion {
-    current_names: bool,
+struct CachedCoreVersion {
+    at_least_2_3: bool,
     expires_at: Instant,
 }
 
@@ -728,28 +773,28 @@ impl Client {
             http,
             base_url,
             credentials: Arc::new(credentials),
-            network_version: Arc::new(tokio::sync::Mutex::new(None)),
+            core_version: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
     async fn read<T: DeserializeOwned>(&self, variant: &'static str) -> Result<T, ApiError> {
-        // Local search and selector resolution require the complete visible inventory.
+        // Compatibility path for Core releases without inventory pagination.
         self.post("read", variant, json!({ "query": {}, "limit": 0 }), true)
             .await
     }
 
-    async fn current_network_names(&self) -> Result<bool, ApiError> {
-        let mut cached = self.network_version.lock().await;
+    async fn core_2_3_or_later(&self) -> Result<bool, ApiError> {
+        let mut cached = self.core_version.lock().await;
         if let Some(version) = cached.as_ref().filter(|v| v.expires_at > Instant::now()) {
-            return Ok(version.current_names);
+            return Ok(version.at_least_2_3);
         }
-        let current_names = networks::uses_current_names(&self.version().await?)
+        let at_least_2_3 = networks::uses_current_names(&self.version().await?)
             .ok_or(ApiError::IncompatibleResponse)?;
-        *cached = Some(CachedNetworkVersion {
-            current_names,
-            expires_at: Instant::now() + NETWORK_VERSION_CACHE_TTL,
+        *cached = Some(CachedCoreVersion {
+            at_least_2_3,
+            expires_at: Instant::now() + CORE_VERSION_CACHE_TTL,
         });
-        Ok(current_names)
+        Ok(at_least_2_3)
     }
 
     async fn post<T: DeserializeOwned>(
@@ -867,7 +912,7 @@ impl KomodoApi for Client {
 
     fn networks<'a>(&'a self, server: &'a str) -> ApiFuture<'a, Vec<networks::NetworkListItem>> {
         Box::pin(async move {
-            let variant = if self.current_network_names().await? {
+            let variant = if self.core_2_3_or_later().await? {
                 "ListNetworks"
             } else {
                 "ListDockerNetworks"
@@ -883,7 +928,7 @@ impl KomodoApi for Client {
         network: &'a str,
     ) -> ApiFuture<'a, networks::Network> {
         Box::pin(async move {
-            let variant = if self.current_network_names().await? {
+            let variant = if self.core_2_3_or_later().await? {
                 "InspectNetwork"
             } else {
                 "InspectDockerNetwork"
@@ -914,6 +959,36 @@ impl KomodoApi for Client {
         Box::pin(async move { self.read("ListRepos").await })
     }
 
+    fn servers_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<ServerInfo>> {
+        Box::pin(async move { self.inventory("ListServers", request).await })
+    }
+    fn stacks_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<StackInfo>> {
+        Box::pin(async move { self.inventory("ListStacks", request).await })
+    }
+    fn deployments_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<DeploymentInfo>> {
+        Box::pin(async move { self.inventory("ListDeployments", request).await })
+    }
+    fn builds_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<BuildInfo>> {
+        Box::pin(async move { self.inventory("ListBuilds", request).await })
+    }
+    fn repos_inventory<'a>(
+        &'a self,
+        request: inventory::InventoryRequest<'a>,
+    ) -> ApiFuture<'a, inventory::InventoryPage<RepoInfo>> {
+        Box::pin(async move { self.inventory("ListRepos", request).await })
+    }
     fn operations(&self, page: u32) -> ApiFuture<'_, OperationPage> {
         Box::pin(async move {
             self.operations_query(page, &operations::OperationQuery::default())

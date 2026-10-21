@@ -487,6 +487,14 @@ async fn actual_http_binary_preserves_tool_content_and_excludes_it_from_every_lo
         "off,rmcp=trace",
         "off,komodo_server::diagnostics=debug",
     ] {
+        // Negotiate inventory once; the later status probe still sees the failure below.
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"type":"GetVersion"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":"2.3.3"})))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .mount(&upstream)
+            .await;
         let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = reservation.local_addr().unwrap().port();
         drop(reservation);

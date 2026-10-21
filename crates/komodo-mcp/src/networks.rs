@@ -77,9 +77,12 @@ impl KomodoMcp {
         let query = validate_query(input.query.as_deref())?;
         let server = select(
             self.read
-                .servers()
+                .servers_inventory(komodo_api::inventory::InventoryRequest::Selector(
+                    &input.server,
+                ))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.server,
         )?;
         let mut items = self
@@ -130,9 +133,12 @@ impl KomodoMcp {
         validate_selector(&input.network)?;
         let server = select(
             self.read
-                .servers()
+                .servers_inventory(komodo_api::inventory::InventoryRequest::Selector(
+                    &input.server,
+                ))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.server,
         )?;
         let network = self

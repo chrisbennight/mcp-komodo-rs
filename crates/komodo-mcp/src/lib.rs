@@ -14,7 +14,7 @@ use std::{
 use komodo_api::{
     Action, BuildInfo, ComposeFile, DeploymentInfo, KomodoApi, Log, MutationReceipt, OperationItem,
     RepoInfo, ResourceListItem, ResourceVersion, ServerInfo, StackConfigDetail, StackConfigPatch,
-    StackDetail, StackInfo, StackService, SystemCommand,
+    StackDetail, StackInfo, StackService, SystemCommand, inventory::InventoryRequest,
 };
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -461,15 +461,18 @@ struct EmptyInput {}
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SearchInput {
+    /// Zero-based Core inventory page. Follow nextPage after exhausting nextOffset.
+    #[serde(default)]
+    page: u32,
     /// ASCII-case-insensitive substring matched against resource name or id.
     /// At most 128 UTF-8 bytes before trimming; no control characters.
     #[schemars(length(max = MAX_QUERY_BYTES), pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$"))]
     query: Option<String>,
-    /// Zero-based offset in the filtered, name-sorted result.
+    /// Zero-based offset within the filtered, name-sorted Core page.
     #[serde(default)]
     #[schemars(range(max = MAX_OFFSET))]
     offset: u16,
-    /// Maximum results to return from the bounded upstream inventory; defaults to 20.
+    /// Maximum results from the bounded Core page; defaults to 20.
     #[serde(default = "default_limit")]
     #[schemars(range(min = 1))]
     limit: usize,
@@ -1262,6 +1265,8 @@ macro_rules! search_output {
         struct $name {
             /// Bounded result items.
             items: Vec<$item>,
+            /// Next Core inventory page after exhausting nextOffset, including empty filtered pages.
+            next_page: Option<u32>,
             /// Offset to request next, or null when no further supported page exists.
             next_offset: Option<u16>,
             /// More matches exist beyond the supported offset range; narrow the query.
@@ -1538,16 +1543,16 @@ impl KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
-        let output = search(
-            self.read
-                .servers()
-                .await
-                .map_err(|error| self.api_error(error))?,
-            &input,
-            normalize_server,
-        )?;
+        let page = self
+            .read
+            .servers_inventory(InventoryRequest::Page(input.page))
+            .await
+            .map_err(|error| self.api_error(error))?;
+        let next_page = page.next_page;
+        let output = search(page.items, &input, normalize_server)?;
         structured(ServerSearchOutput {
             items: output.items,
+            next_page,
             next_offset: output.next_offset,
             truncated: output.truncated,
         })
@@ -1561,9 +1566,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         let item = select(
             self.read
-                .servers()
+                .servers_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         structured(normalize_server(item))
@@ -1575,16 +1581,16 @@ impl KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
-        let output = search(
-            self.read
-                .stacks()
-                .await
-                .map_err(|error| self.api_error(error))?,
-            &input,
-            normalize_stack,
-        )?;
+        let page = self
+            .read
+            .stacks_inventory(InventoryRequest::Page(input.page))
+            .await
+            .map_err(|error| self.api_error(error))?;
+        let next_page = page.next_page;
+        let output = search(page.items, &input, normalize_stack)?;
         structured(StackSearchOutput {
             items: output.items,
+            next_page,
             next_offset: output.next_offset,
             truncated: output.truncated,
         })
@@ -1598,9 +1604,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         let item = select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         structured(normalize_stack(item))
@@ -1615,9 +1622,10 @@ impl KomodoMcp {
         input.window.validate()?;
         let item = select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         structured(normalize_stack_diagnostics(item, input.window))
@@ -1632,9 +1640,10 @@ impl KomodoMcp {
         input.window.validate()?;
         let item = select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         let detail = self
@@ -1658,9 +1667,10 @@ impl KomodoMcp {
         input.window.validate()?;
         let item = select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         let detail = self
@@ -1679,9 +1689,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         let item = select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         let detail = self
@@ -1702,9 +1713,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         let item = select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         let detail = self
@@ -1723,9 +1735,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         let item = select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         let detail = self
@@ -1744,9 +1757,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         let item = select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         let detail = self
@@ -1768,9 +1782,10 @@ impl KomodoMcp {
         validate_log_tail(&input)?;
         let item = select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         let log = self
@@ -1792,16 +1807,16 @@ impl KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
-        let output = search(
-            self.read
-                .deployments()
-                .await
-                .map_err(|error| self.api_error(error))?,
-            &input,
-            normalize_deployment,
-        )?;
+        let page = self
+            .read
+            .deployments_inventory(InventoryRequest::Page(input.page))
+            .await
+            .map_err(|error| self.api_error(error))?;
+        let next_page = page.next_page;
+        let output = search(page.items, &input, normalize_deployment)?;
         structured(DeploymentSearchOutput {
             items: output.items,
+            next_page,
             next_offset: output.next_offset,
             truncated: output.truncated,
         })
@@ -1815,9 +1830,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         let item = select(
             self.read
-                .deployments()
+                .deployments_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         structured(normalize_deployment(item))
@@ -1829,16 +1845,16 @@ impl KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
-        let output = search(
-            self.read
-                .builds()
-                .await
-                .map_err(|error| self.api_error(error))?,
-            &input,
-            normalize_build,
-        )?;
+        let page = self
+            .read
+            .builds_inventory(InventoryRequest::Page(input.page))
+            .await
+            .map_err(|error| self.api_error(error))?;
+        let next_page = page.next_page;
+        let output = search(page.items, &input, normalize_build)?;
         structured(BuildSearchOutput {
             items: output.items,
+            next_page,
             next_offset: output.next_offset,
             truncated: output.truncated,
         })
@@ -1852,9 +1868,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         let item = select(
             self.read
-                .builds()
+                .builds_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         structured(normalize_build(item))
@@ -1866,16 +1883,16 @@ impl KomodoMcp {
     ) -> Result<CallToolResult, McpError> {
         let input = parse::<SearchInput>(params)?;
         validate_search(&input)?;
-        let output = search(
-            self.read
-                .repos()
-                .await
-                .map_err(|error| self.api_error(error))?,
-            &input,
-            normalize_repo,
-        )?;
+        let page = self
+            .read
+            .repos_inventory(InventoryRequest::Page(input.page))
+            .await
+            .map_err(|error| self.api_error(error))?;
+        let next_page = page.next_page;
+        let output = search(page.items, &input, normalize_repo)?;
         structured(RepoSearchOutput {
             items: output.items,
+            next_page,
             next_offset: output.next_offset,
             truncated: output.truncated,
         })
@@ -1889,9 +1906,10 @@ impl KomodoMcp {
         validate_selector(&input.selector)?;
         let item = select(
             self.read
-                .repos()
+                .repos_inventory(InventoryRequest::Selector(&input.selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             &input.selector,
         )?;
         structured(normalize_repo(item))
@@ -1996,9 +2014,10 @@ impl KomodoMcp {
             Action::DeployStack | Action::RestartStack | Action::StopStack => {
                 select(
                     self.read
-                        .stacks()
+                        .stacks_inventory(InventoryRequest::Selector(&input.selector))
                         .await
-                        .map_err(|error| self.api_error(error))?,
+                        .map_err(|error| self.api_error(error))?
+                        .items,
                     &input.selector,
                 )?
                 .id
@@ -2006,9 +2025,10 @@ impl KomodoMcp {
             Action::DeployDeployment | Action::RestartDeployment => {
                 select(
                     self.read
-                        .deployments()
+                        .deployments_inventory(InventoryRequest::Selector(&input.selector))
                         .await
-                        .map_err(|error| self.api_error(error))?,
+                        .map_err(|error| self.api_error(error))?
+                        .items,
                     &input.selector,
                 )?
                 .id
@@ -2016,9 +2036,10 @@ impl KomodoMcp {
             Action::RunBuild | Action::CancelBuild => {
                 select(
                     self.read
-                        .builds()
+                        .builds_inventory(InventoryRequest::Selector(&input.selector))
                         .await
-                        .map_err(|error| self.api_error(error))?,
+                        .map_err(|error| self.api_error(error))?
+                        .items,
                     &input.selector,
                 )?
                 .id
@@ -2026,9 +2047,10 @@ impl KomodoMcp {
             Action::PullRepo => {
                 select(
                     self.read
-                        .repos()
+                        .repos_inventory(InventoryRequest::Selector(&input.selector))
                         .await
-                        .map_err(|error| self.api_error(error))?,
+                        .map_err(|error| self.api_error(error))?
+                        .items,
                     &input.selector,
                 )?
                 .id
@@ -2045,9 +2067,10 @@ impl KomodoMcp {
     async fn resolve_stack_id(&self, selector: &str) -> Result<String, McpError> {
         Ok(select(
             self.read
-                .stacks()
+                .stacks_inventory(InventoryRequest::Selector(selector))
                 .await
-                .map_err(|error| self.api_error(error))?,
+                .map_err(|error| self.api_error(error))?
+                .items,
             selector,
         )?
         .id)
@@ -3117,7 +3140,7 @@ mod tests {
         Action, ApiError, ApiFuture, BuildInfo, ComposeFile, DeploymentInfo, KomodoApi, Log,
         MutationReceipt, OperationItem, OperationPage, RepoInfo, ResourceListItem, ServerInfo,
         StackComposeInfo, StackConfigDetail, StackConfigPatch, StackDetail, StackInfo,
-        StackService, SystemCommand,
+        StackService, SystemCommand, inventory::InventoryRequest,
     };
     use rmcp::{
         ServerHandler,
@@ -3574,6 +3597,43 @@ mod tests {
                     template: Some(false),
                     tags: Some(Vec::new()),
                 }])
+            })
+        }
+
+        fn stacks_inventory<'a>(
+            &'a self,
+            request: InventoryRequest<'a>,
+        ) -> ApiFuture<'a, komodo_api::inventory::InventoryPage<StackInfo>> {
+            Box::pin(async move {
+                use komodo_api::inventory::InventoryPage;
+                if matches!(
+                    request,
+                    InventoryRequest::Page(7 | 8) | InventoryRequest::Selector("paged-stack")
+                ) {
+                    self.before_read()?;
+                    let names: &[&str] = if matches!(request, InventoryRequest::Page(7)) {
+                        &["Zulu", "alpha"]
+                    } else {
+                        &["paged-stack"]
+                    };
+                    return Ok(InventoryPage {
+                        items: names
+                            .iter()
+                            .map(|name| {
+                                resource(
+                                    name,
+                                    name,
+                                    StackInfo {
+                                        state: "Running".into(),
+                                        ..Default::default()
+                                    },
+                                )
+                            })
+                            .collect(),
+                        next_page: matches!(request, InventoryRequest::Page(7)).then_some(8),
+                    });
+                }
+                InventoryPage::from_legacy(self.stacks().await?, request)
             })
         }
 
@@ -4950,6 +5010,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resource_pages_keep_local_offsets_and_empty_page_continuation() {
+        for (input, ids, offset, page) in [
+            (
+                json!({"page":7,"limit":1}),
+                json!(["alpha"]),
+                json!(1),
+                json!(8),
+            ),
+            (
+                json!({"page":7,"limit":1,"offset":1}),
+                json!(["Zulu"]),
+                Value::Null,
+                json!(8),
+            ),
+            (
+                json!({"page":7,"query":"absent"}),
+                json!([]),
+                Value::Null,
+                json!(8),
+            ),
+            (
+                json!({"page":8}),
+                json!(["paged-stack"]),
+                Value::Null,
+                Value::Null,
+            ),
+        ] {
+            let output = handler()
+                .dispatch(
+                    &CallToolRequestParams::new("stacks.search").with_arguments(arguments(&input)),
+                )
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(
+                output["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|item| item["id"].clone())
+                    .collect::<Vec<_>>(),
+                ids.as_array().unwrap().clone()
+            );
+            assert_eq!(output["nextOffset"], offset);
+            assert_eq!(output["nextPage"], page);
+        }
+        let output = handler()
+            .dispatch(
+                &CallToolRequestParams::new("stacks.status")
+                    .with_arguments(arguments(&json!({"selector":"paged-stack"}))),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(output["id"], "paged-stack");
+    }
+
+    #[tokio::test]
     async fn typed_operation_filters_select_target_outcome_and_time_without_losing_continuation() {
         for (filter, expected) in [
             (
@@ -5402,6 +5522,7 @@ mod tests {
             let page = search(
                 resources(),
                 &SearchInput {
+                    page: 0,
                     query: None,
                     offset: 0,
                     limit,
@@ -5442,6 +5563,7 @@ mod tests {
         let page = search(
             resources.clone(),
             &SearchInput {
+                page: 0,
                 query: None,
                 offset: 10_000,
                 limit: 50,
@@ -5455,6 +5577,7 @@ mod tests {
         let page = search(
             resources,
             &SearchInput {
+                page: 0,
                 query: None,
                 offset: 9_950,
                 limit: 50,
@@ -5532,6 +5655,23 @@ mod tests {
     }
 
     #[test]
+    fn query_and_selector_validation_bounds() {
+        for invalid in ["", "line\nbreak"] {
+            assert!(validate_selector(invalid).is_err());
+        }
+        assert!(validate_selector(&"x".repeat(128)).is_ok());
+        assert!(validate_selector(&"x".repeat(129)).is_err());
+        assert!(validate_query(Some(&"x".repeat(128))).is_ok());
+        assert!(validate_query(Some(&"x".repeat(129))).is_err());
+        assert!(validate_query(Some("line\nbreak")).is_err());
+        assert_eq!(
+            validate_query(Some("  MiNi  ")).expect("query"),
+            Some("mini".into())
+        );
+        assert_eq!(validate_query(Some("  ")).expect("empty query"), None);
+    }
+
+    #[test]
     fn search_and_selector_boundaries_are_behavioral_contracts() {
         fn item(id: &str, name: &str) -> ResourceListItem<()> {
             ResourceListItem {
@@ -5552,6 +5692,7 @@ mod tests {
         let first = search(
             resources.clone(),
             &SearchInput {
+                page: 0,
                 query: None,
                 offset: 0,
                 limit: 1,
@@ -5564,6 +5705,7 @@ mod tests {
         let second = search(
             resources.clone(),
             &SearchInput {
+                page: 0,
                 query: None,
                 offset: 1,
                 limit: 1,
@@ -5576,6 +5718,7 @@ mod tests {
         let id_match = search(
             resources.clone(),
             &SearchInput {
+                page: 0,
                 query: Some("RESOURCE-Z".into()),
                 offset: 0,
                 limit: 1,
@@ -5597,23 +5740,11 @@ mod tests {
         );
         assert!(select(vec![item("one", "same"), item("two", "Same")], "same").is_err());
 
-        for invalid in ["", "line\nbreak"] {
-            assert!(validate_selector(invalid).is_err());
-        }
-        assert!(validate_selector(&"x".repeat(128)).is_ok());
-        assert!(validate_selector(&"x".repeat(129)).is_err());
-        assert!(validate_query(Some(&"x".repeat(128))).is_ok());
-        assert!(validate_query(Some(&"x".repeat(129))).is_err());
-        assert!(validate_query(Some("line\nbreak")).is_err());
-        assert_eq!(
-            validate_query(Some("  MiNi  ")).expect("query"),
-            Some("mini".into())
-        );
-        assert_eq!(validate_query(Some("  ")).expect("empty query"), None);
         assert!(
             search(
                 resources.clone(),
                 &SearchInput {
+                    page: 0,
                     query: None,
                     offset: 10_000,
                     limit: 1,
@@ -5628,6 +5759,7 @@ mod tests {
                 search(
                     resources.clone(),
                     &SearchInput {
+                        page: 0,
                         query: None,
                         offset,
                         limit,

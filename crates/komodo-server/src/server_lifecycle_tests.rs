@@ -35,6 +35,11 @@ impl Fixture {
 
     async fn with_administrative_credentials(timeout: Duration, include_admin: bool) -> Self {
         let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"type":"GetVersion"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":"2.3.3"})))
+            .mount(&upstream)
+            .await;
         let signing = SigningKey::from_bytes(&[7; 32]);
         Mock::given(method("GET"))
             .and(path("/jwks"))
@@ -447,7 +452,7 @@ async fn authenticated_http_content_reads_work_without_administrative_credential
             .unwrap()
             .contains("TEST_MODE=available")
     );
-    assert_eq!(fixture.requests().await.len(), 2);
+    assert_eq!(fixture.requests().await.len(), 3);
     let response = fixture
         .router
         .clone()
@@ -462,7 +467,7 @@ async fn authenticated_http_content_reads_work_without_administrative_credential
     );
     assert_eq!(
         fixture.requests().await.len(),
-        2,
+        3,
         "a missing admin client cannot submit a mutation"
     );
 }
@@ -495,8 +500,14 @@ async fn timeout_during_resolution_never_submits_an_action_configuration_or_file
         assert!(std::str::from_utf8(&body).unwrap().contains("reconcile"));
         tokio::time::sleep(Duration::from_millis(600)).await;
         let requests = fixture.requests().await;
-        assert_eq!(requests.len(), 1, "no work after the resolution read");
-        assert_eq!(requests[0]["type"], "ListStacks");
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["GetVersion", "ListStacks"],
+            "no work after the resolution read"
+        );
     }
 }
 
@@ -523,7 +534,7 @@ async fn dropped_http_future_cancels_resolution_and_new_calls_wait_for_handler_c
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert_eq!(
         fixture.requests().await.len(),
-        1,
+        2,
         "cancelled request cannot submit later"
     );
     let next = fixture
@@ -604,5 +615,5 @@ async fn shutdown_cancels_work_and_readiness_without_disabling_liveness() {
         .unwrap();
     assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    assert_eq!(fixture.requests().await.len(), 1);
+    assert_eq!(fixture.requests().await.len(), 2);
 }
