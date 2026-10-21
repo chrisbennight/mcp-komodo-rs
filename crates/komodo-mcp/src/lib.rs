@@ -327,7 +327,7 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     read_spec(
         ToolKind::OperationsSearch,
         "operations.search",
-        "Search one bounded operation page with resource correlation, initiating user, version, operation-specific data, and configuration history reported by Core. Ordinary history remains inline; explicit credential fields use native original files.",
+        "Search one bounded operation page, optionally filtering by exact resource target, operation kind, normalized outcome, and start-time range. Retains correlation, initiating user, version, operation-specific data, and configuration history. Ordinary history remains inline; explicit credential fields use native original files.",
     ),
     read_spec(
         ToolKind::OperationsStatus,
@@ -769,6 +769,93 @@ struct OperationsSearchInput {
     #[serde(default = "default_limit")]
     #[schemars(range(min = 1))]
     limit: usize,
+    /// Optional exact resource, operation, outcome, and start-time filters applied upstream.
+    filter: Option<OperationSearchFilter>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct OperationSearchFilter {
+    /// Resource type and stable id, not a resource name or caller identity.
+    target: Option<OperationTargetFilter>,
+    /// Exact Core operation kind, 1 to 128 UTF-8 bytes without controls.
+    #[schemars(
+        length(min = 1, max = 128),
+        pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$")
+    )]
+    operation: Option<String>,
+    /// Normalized outcome; pending states never match completed failure.
+    outcome: Option<OperationOutcome>,
+    /// Inclusive start timestamp in Unix milliseconds.
+    #[schemars(range(min = 0))]
+    started_after: Option<i64>,
+    /// Exclusive start timestamp in Unix milliseconds; must exceed `started_after`.
+    #[schemars(range(min = 0))]
+    started_before: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct OperationTargetFilter {
+    /// Exact Core resource type, including supported future kinds.
+    #[schemars(
+        length(min = 1, max = 128),
+        pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$")
+    )]
+    kind: String,
+    /// Exact stable resource id, 1 to 128 UTF-8 bytes without controls.
+    #[schemars(
+        length(min = 1, max = 128),
+        pattern(r"^[^\u0000-\u001F\u007F-\u009F]*$")
+    )]
+    id: String,
+}
+
+impl OperationSearchFilter {
+    fn validated_query(&self) -> Result<komodo_api::operations::OperationQuery, McpError> {
+        use komodo_api::operations::{OperationQuery, UpdateStatusFilter};
+        if let Some(target) = &self.target {
+            validate_selector(&target.kind)?;
+            validate_selector(&target.id)?;
+        }
+        if let Some(operation) = &self.operation {
+            validate_selector(operation)?;
+        }
+        if self.started_after.is_some_and(|value| value < 0)
+            || self.started_before.is_some_and(|value| value < 0)
+            || self
+                .started_after
+                .zip(self.started_before)
+                .is_some_and(|(after, before)| after >= before)
+        {
+            return Err(McpError::invalid_params(
+                "operation timestamps must be nonnegative and started_after must precede started_before",
+                None,
+            ));
+        }
+        let (status, success) = match self.outcome {
+            None => (None, None),
+            Some(OperationOutcome::Accepted) => (Some(UpdateStatusFilter::Queued), None),
+            Some(OperationOutcome::Running) => (Some(UpdateStatusFilter::InProgress), None),
+            Some(OperationOutcome::Succeeded) => (Some(UpdateStatusFilter::Complete), Some(true)),
+            Some(OperationOutcome::Failed) => (Some(UpdateStatusFilter::Complete), Some(false)),
+            Some(OperationOutcome::Unknown) => (Some(UpdateStatusFilter::Other), None),
+        };
+        Ok(OperationQuery {
+            target: self
+                .target
+                .as_ref()
+                .map(|target| komodo_api::OperationTarget {
+                    kind: target.kind.clone(),
+                    id: target.id.clone(),
+                }),
+            operation: self.operation.clone(),
+            status,
+            success,
+            started_after: self.started_after,
+            started_before: self.started_before,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -923,7 +1010,7 @@ struct OperationStatus {
     other_data: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 enum OperationOutcome {
     Accepted,
@@ -1841,9 +1928,15 @@ impl KomodoMcp {
             ));
         }
         let query = validate_query(input.query.as_deref())?;
+        let filter = input
+            .filter
+            .as_ref()
+            .map(OperationSearchFilter::validated_query)
+            .transpose()?
+            .unwrap_or_default();
         let page = self
             .read
-            .operations(input.page)
+            .operations_query(input.page, &filter)
             .await
             .map_err(|error| self.api_error(error))?;
         let next_page = page.next_page;
@@ -3583,6 +3676,35 @@ mod tests {
                         next_page: None,
                     });
                 }
+                if page == 5 {
+                    return Ok(OperationPage {
+                        operations: [
+                            ("Queued", false, "Stack", "DeployStack"),
+                            ("InProgress", false, "Stack", "DeployStack"),
+                            ("Complete", true, "Stack", "DeployStack"),
+                            ("Complete", false, "Stack", "DeployStack"),
+                            ("FutureState", true, "FutureResource", "FutureOperation"),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        .map(
+                            |(index, (status, success, kind, operation))| OperationItem {
+                                id: format!("filtered-{index}"),
+                                operation: operation.into(),
+                                status: status.into(),
+                                success,
+                                start_ts: 10 * (i64::try_from(index).unwrap() + 1),
+                                target: Some(komodo_api::OperationTarget {
+                                    kind: kind.into(),
+                                    id: "target-id".into(),
+                                }),
+                                ..Default::default()
+                            },
+                        )
+                        .collect(),
+                        next_page: Some(6),
+                    });
+                }
                 Ok(OperationPage {
                     operations: vec![OperationItem {
                         id: if page > 100 {
@@ -4945,6 +5067,75 @@ mod tests {
             .structured_content
             .unwrap();
         assert_eq!(output["id"], "paged-stack");
+    }
+
+    #[tokio::test]
+    async fn typed_operation_filters_select_target_outcome_and_time_without_losing_continuation() {
+        for (filter, expected) in [
+            (
+                json!({"target":{"kind":"Stack","id":"target-id"},"operation":"DeployStack","outcome":"succeeded","started_after":25,"started_before":35}),
+                "filtered-2",
+            ),
+            (json!({"outcome":"failed"}), "filtered-3"),
+            (json!({"outcome":"accepted"}), "filtered-0"),
+            (json!({"outcome":"running"}), "filtered-1"),
+            (
+                json!({"target":{"kind":"FutureResource","id":"target-id"},"outcome":"unknown"}),
+                "filtered-4",
+            ),
+        ] {
+            let output = handler()
+                .dispatch(
+                    &CallToolRequestParams::new("operations.search")
+                        .with_arguments(arguments(&json!({"page":5,"filter":filter}))),
+                )
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(output["items"].as_array().unwrap().len(), 1);
+            assert_eq!(output["items"][0]["id"], expected);
+            assert_eq!(output["nextPage"], 6);
+        }
+        let empty = handler()
+            .dispatch(
+                &CallToolRequestParams::new("operations.search").with_arguments(arguments(
+                    &json!({"page":5,"filter":{"target":{"kind":"Stack","id":"another-id"}}}),
+                )),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(empty["items"], json!([]));
+        assert_eq!(empty["nextPage"], 6);
+    }
+
+    #[tokio::test]
+    async fn invalid_operation_filters_make_no_upstream_reads() {
+        let read = Arc::new(FakeApi::default());
+        let handler = KomodoMcp::read_only(read.clone());
+        for filter in [
+            json!({"target":{"kind":"Stack","id":""}}),
+            json!({"operation":"x".repeat(129)}),
+            json!({"started_after":-1}),
+            json!({"started_after":20,"started_before":10}),
+            json!({"outcome":"unknown-outcome"}),
+            json!({"query":{"$where":"untrusted"}}),
+        ] {
+            let error = handler
+                .dispatch(
+                    &CallToolRequestParams::new("operations.search")
+                        .with_arguments(arguments(&json!({"filter":filter}))),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        }
+        assert_eq!(
+            read.read_attempts.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 
     #[tokio::test]

@@ -139,6 +139,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn selector_deadline_preserves_stable_id_and_reachability_guidance() {
+        let server = MockServer::start().await;
+        version(&server, "2.3.3").await;
+        Mock::given(body_json(json!({"type":"ListStacks","params":{"query":{"terms":["application"]},"page":0,"limit":PAGE_SIZE,"sort_by":"Name","sort_desc":false}})))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(31)).set_body_json(json!([])))
+            .expect(1).mount(&server).await;
+        let client = Client::new(
+            Url::parse(&server.uri()).unwrap(),
+            Credentials::new("synthetic-read".into(), "synthetic-secret".into()).unwrap(),
+            Duration::from_mins(1),
+        )
+        .unwrap();
+        let error = client
+            .stacks_inventory(InventoryRequest::Selector("application"))
+            .await
+            .unwrap_err();
+        assert_eq!(error, ApiError::InventorySelectorTooBroad);
+        assert!(error.to_string().contains("exact resource id"));
+        assert!(error.to_string().contains("Core reachability"));
+    }
+
+    #[tokio::test]
     async fn older_core_keeps_bounded_legacy_page_zero_without_claiming_pagination() {
         let server = MockServer::start().await;
         version(&server, "2.1.2").await;
@@ -205,7 +227,7 @@ impl Client {
         if matches!(request, InventoryRequest::Selector(_)) {
             tokio::time::timeout(std::time::Duration::from_secs(30), read)
                 .await
-                .map_err(|_| ApiError::Unavailable)?
+                .map_err(|_| ApiError::InventorySelectorTooBroad)?
         } else {
             read.await
         }
