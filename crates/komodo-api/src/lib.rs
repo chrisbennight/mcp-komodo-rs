@@ -2,6 +2,7 @@
 
 pub mod errors;
 pub mod networks;
+pub mod operations;
 
 use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
 
@@ -640,6 +641,17 @@ pub trait KomodoApi: Send + Sync {
     fn builds(&self) -> ApiFuture<'_, Vec<ResourceListItem<BuildInfo>>>;
     fn repos(&self) -> ApiFuture<'_, Vec<ResourceListItem<RepoInfo>>>;
     fn operations(&self, page: u32) -> ApiFuture<'_, OperationPage>;
+    fn operations_query<'a>(
+        &'a self,
+        page: u32,
+        query: &'a operations::OperationQuery,
+    ) -> ApiFuture<'a, OperationPage> {
+        Box::pin(async move {
+            let mut page = self.operations(page).await?;
+            page.operations.retain(|item| query.matches(item));
+            Ok(page)
+        })
+    }
     fn update<'a>(&'a self, operation_id: &'a str) -> ApiFuture<'a, OperationItem>;
     fn stack_detail<'a>(&'a self, selector: &'a str) -> ApiFuture<'a, StackDetail>;
     fn stack_log<'a>(
@@ -876,10 +888,21 @@ impl KomodoApi for Client {
 
     fn operations(&self, page: u32) -> ApiFuture<'_, OperationPage> {
         Box::pin(async move {
+            self.operations_query(page, &operations::OperationQuery::default())
+                .await
+        })
+    }
+
+    fn operations_query<'a>(
+        &'a self,
+        page: u32,
+        query: &'a operations::OperationQuery,
+    ) -> ApiFuture<'a, OperationPage> {
+        Box::pin(async move {
             self.post::<ListUpdatesResponse>(
                 "read",
                 "ListUpdates",
-                json!({ "query": null, "page": page }),
+                json!({ "query": query.upstream_query(), "page": page }),
                 true,
             )
             .await
