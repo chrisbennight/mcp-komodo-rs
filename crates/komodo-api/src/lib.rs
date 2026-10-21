@@ -95,7 +95,9 @@ pub enum ApiError {
     ResponseTooLarge,
     #[error("inventory pagination requires Komodo Core 2.3 or later; use page zero on older Core")]
     InventoryPaginationUnsupported,
-    #[error("resource name lookup exceeded its bounded search; use the exact resource id")]
+    #[error(
+        "resource lookup exceeded its bounded search; use the exact resource id or check Core reachability"
+    )]
     InventorySelectorTooBroad,
 }
 
