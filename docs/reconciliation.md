@@ -52,8 +52,11 @@ which stage the request reached.
 | `stacks.webhook.secret.write` | `stacks.webhook.status` for source; native `stacks.webhook.secret.read` file transfer for a custom-value comparison outside model context |
 
 Use the mutation error's `target` as the `selector` for stack reads.
-`operations.search` filters operation ID or kind. Search/status results include
-`target: {"kind":"Stack","id":"..."}` when Core provides a recognized resource
+`operations.search` retains its operation-ID/kind substring and accepts typed
+filters for the exact resource target, operation kind, normalized outcome, and
+start-time interval. Use the intended target and relevant time interval to
+narrow reconciliation candidates before following result pages. Search/status results include
+`target: {"kind":"Stack","id":"..."}` when Core provides a resource
 target, and null otherwise. This helps distinguish concurrent operations on
 different resources. It is not a per-caller request ID: same-kind operations on
 the same target can remain ambiguous. A timestamp match or running resource is
