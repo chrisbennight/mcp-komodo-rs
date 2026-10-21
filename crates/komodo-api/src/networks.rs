@@ -107,12 +107,21 @@ mod tests {
     use super::*;
     use crate::{Client, Credentials, KomodoApi};
     use serde_json::json;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use url::Url;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{body_json, header, method, path},
     };
+
+    fn read_client(upstream: &MockServer) -> Client {
+        Client::new(
+            Url::parse(&upstream.uri()).unwrap(),
+            Credentials::new("synthetic-read-key".into(), "synthetic-read-secret".into()).unwrap(),
+            Duration::from_secs(2),
+        )
+        .unwrap()
+    }
 
     #[tokio::test]
     async fn wire_reads_preserve_addresses_and_use_the_versioned_named_requests() {
@@ -125,7 +134,7 @@ mod tests {
                 .and(path("/read"))
                 .and(body_json(json!({"type":"GetVersion","params":{}})))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":version})))
-                .expect(2)
+                .expect(1)
                 .mount(&upstream)
                 .await;
             Mock::given(method("POST"))
@@ -155,13 +164,7 @@ mod tests {
                     "Options":{"com.docker.network.bridge.name":"br-app"},"Labels":{"owner":"$(untrusted-label)"}
                 })))
                 .expect(1).mount(&upstream).await;
-            let client = Client::new(
-                Url::parse(&upstream.uri()).unwrap(),
-                Credentials::new("synthetic-read-key".into(), "synthetic-read-secret".into())
-                    .unwrap(),
-                Duration::from_secs(2),
-            )
-            .unwrap();
+            let client = read_client(&upstream);
             let listed = client.networks("server-1").await.unwrap();
             assert_eq!(listed[0].ipam_subnet.as_deref(), Some("10.20.0.0/24"));
             assert_eq!(listed[0].ipam_gateway.as_deref(), Some("10.20.0.1"));
@@ -200,6 +203,91 @@ mod tests {
             assert_eq!(uses_current_names(version), Some(true));
         }
         assert_eq!(uses_current_names("unknown"), None);
+    }
+
+    #[tokio::test]
+    async fn concurrent_network_reads_share_version_and_refresh_after_expiry() {
+        let upstream = MockServer::start().await;
+        Mock::given(body_json(json!({"type":"GetVersion","params":{}})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(20))
+                    .set_body_json(json!({"version":"2.1.2"})),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        Mock::given(body_json(
+            json!({"type":"ListDockerNetworks","params":{"server":"server-1"}}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+        let client = read_client(&upstream);
+        let other = client.clone();
+        let (first, second) = tokio::join!(client.networks("server-1"), other.networks("server-1"));
+        assert!(first.is_ok() && second.is_ok());
+        assert_eq!(upstream.received_requests().await.unwrap().len(), 3);
+        upstream.reset().await;
+        client
+            .network_version
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .expires_at = Instant::now();
+        Mock::given(body_json(json!({"type":"GetVersion","params":{}})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":"2.3.3"})))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        Mock::given(body_json(
+            json!({"type":"ListNetworks","params":{"server":"server-1"}}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+        assert!(client.networks("server-1").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn version_cache_does_not_mask_reachability_or_cache_invalid_versions() {
+        let upstream = MockServer::start().await;
+        Mock::given(body_json(json!({"type":"GetVersion","params":{}})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":"2.3.3"})))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        let client = read_client(&upstream);
+        assert!(client.current_network_names().await.unwrap());
+        upstream.reset().await;
+        Mock::given(body_json(json!({"type":"GetVersion","params":{}})))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(2)
+            .mount(&upstream)
+            .await;
+        assert!(client.version().await.is_err());
+        upstream.reset().await;
+        client
+            .network_version
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .expires_at = Instant::now();
+        Mock::given(body_json(json!({"type":"GetVersion","params":{}})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":"unknown"})))
+            .expect(2)
+            .mount(&upstream)
+            .await;
+        for _ in 0..2 {
+            assert_eq!(
+                client.current_network_names().await,
+                Err(crate::ApiError::IncompatibleResponse)
+            );
+        }
     }
 
     #[test]

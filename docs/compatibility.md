@@ -17,7 +17,10 @@ Network reads follow the documented Core 2.3 request rename:
 [`ListNetworks` and `InspectNetwork`](https://github.com/moghtech/komodo/blob/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/client/core/rs/src/api/read/docker.rs).
 Core releases before 2.3 use `ListDockerNetworks` and `InspectDockerNetwork`.
 The adapter selects the named request after reading Core's version; an
-unparseable version fails explicitly. Loopback tests verify both release forms
+unparseable version fails explicitly. Network request selection shares version
+metadata across client clones for one minute, coordinating concurrent refreshes;
+an upgrade is observed after expiration. `system.status` still makes a fresh
+version request to establish reachability. Loopback tests verify both release forms
 and the fields in the
 [Core 2.3.3 network model](https://github.com/moghtech/komodo/blob/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/client/core/rs/src/entities/docker/network.rs).
 
