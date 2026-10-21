@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(upstream.received_requests().await.unwrap().len(), 3);
         upstream.reset().await;
         client
-            .network_version
+            .core_version
             .lock()
             .await
             .as_mut()
@@ -261,7 +261,7 @@ mod tests {
             .mount(&upstream)
             .await;
         let client = read_client(&upstream);
-        assert!(client.current_network_names().await.unwrap());
+        assert!(client.core_2_3_or_later().await.unwrap());
         upstream.reset().await;
         Mock::given(body_json(json!({"type":"GetVersion","params":{}})))
             .respond_with(ResponseTemplate::new(503))
@@ -271,7 +271,7 @@ mod tests {
         assert!(client.version().await.is_err());
         upstream.reset().await;
         client
-            .network_version
+            .core_version
             .lock()
             .await
             .as_mut()
@@ -284,7 +284,7 @@ mod tests {
             .await;
         for _ in 0..2 {
             assert_eq!(
-                client.current_network_names().await,
+                client.core_2_3_or_later().await,
                 Err(crate::ApiError::IncompatibleResponse)
             );
         }

@@ -28,6 +28,11 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"type":"GetVersion"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version":"2.3.3"})))
+            .mount(&upstream)
+            .await;
         let signing = SigningKey::from_bytes(&[7; 32]);
         Mock::given(method("GET"))
             .and(path("/jwks"))
@@ -146,7 +151,7 @@ async fn real_client_disconnect_cancels_resolution_and_releases_admission() {
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert_eq!(
         fixture.request_kinds().await,
-        ["ListStacks"],
+        ["GetVersion", "ListStacks"],
         "disconnect must prevent a late write"
     );
     let response = reqwest::Client::builder()
@@ -179,7 +184,7 @@ async fn termination_signals_cancel_active_binary_requests_without_late_writes()
         fixture.signal_and_wait(signal).await;
         assert_eq!(
             fixture.request_kinds().await,
-            ["ListStacks"],
+            ["GetVersion", "ListStacks"],
             "shutdown must not submit a late write"
         );
         drop(socket);

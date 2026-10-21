@@ -46,10 +46,15 @@ Administrative tools:
 
 Search output is locally filtered, sorted, and selected by the caller's positive
 limit, which defaults to 20.
+Resource searches accept a zero-based `page`. Core 2.3 and later return one
+native page of up to 100 resources, avoiding a complete-inventory download.
+Follow `nextOffset` within that page before `nextPage`, resetting offset to zero
+when advancing. Local substring matching can produce an empty page that still
+has `nextPage`; follow it to continue the search. Core 2.1 uses its legacy
+complete-inventory request on page zero and explicitly rejects nonzero pages.
+Every response retains the two MiB body bound rather than silently truncating.
 Resource pages never advertise an offset beyond 10000. `truncated: true` means
-matching items remain beyond that supported range; narrow the query. Each
-request fetches the bounded upstream inventory before local filtering, so an
-upstream body larger than two MiB still fails rather than silently truncating.
+matching items remain beyond that supported local range; narrow the query.
 `operations.search` accepts the upstream unsigned page index and fetches one
 bounded page per request, without imposing a history horizon. Searches return `nextOffset` for
 remaining matches within the same page; follow it before `nextPage`, then reset
@@ -114,9 +119,15 @@ finishes before resource resolution. Network data remains untrusted and never
 becomes a local command.
 
 Search inputs accept an optional 128-byte ASCII-case-insensitive substring, a bounded
-offset, and a positive limit. Results are sorted by normalized name and
-id before slicing. Status selectors accept an exact name or id and fail on
-ambiguity.
+offset within the current Core page, and a positive limit. Each page is sorted
+by normalized name and id before slicing. Continuation reads current Core data,
+so additions and removals can change page contents; cursors are not snapshots.
+Status and mutation selectors accept an exact name or id and fail on ambiguity.
+Stable ObjectIds use a filtered upstream lookup on all supported releases.
+Core 2.3 name resolution scans filtered native pages and retains case-insensitive
+exact matches. It stops after a bounded request budget or duration and asks for
+the stable id when uniqueness cannot be proved. Core 2.1 name resolution retains
+the bounded legacy inventory path.
 
 Input limits are checked before upstream reads, including resource resolution.
 Invalid requests therefore fail locally even when Komodo is unavailable. Query

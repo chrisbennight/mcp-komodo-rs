@@ -17,12 +17,21 @@ Network reads follow the documented Core 2.3 request rename:
 [`ListNetworks` and `InspectNetwork`](https://github.com/moghtech/komodo/blob/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/client/core/rs/src/api/read/docker.rs).
 Core releases before 2.3 use `ListDockerNetworks` and `InspectDockerNetwork`.
 The adapter selects the named request after reading Core's version; an
-unparseable version fails explicitly. Network request selection shares version
+unparseable version fails explicitly. Network request selection and inventory pagination share version
 metadata across client clones for one minute, coordinating concurrent refreshes;
 an upgrade is observed after expiration. `system.status` still makes a fresh
 version request to establish reachability. Loopback tests verify both release forms
 and the fields in the
 [Core 2.3.3 network model](https://github.com/moghtech/komodo/blob/780ac68b992094a9fccd5fffb760e0c84fd3c3d1/client/core/rs/src/entities/docker/network.rs).
+
+Inventory searches use the native positive-limit pagination introduced by
+[Core 2.3](https://github.com/moghtech/komodo/blob/v2.3.3/client/core/rs/src/api/read/stack.rs).
+Older Core uses a bounded complete-inventory request on page zero; later pages
+are explicitly unsupported. Stable ObjectId selectors use the shared exact
+names/ids filter on both release forms. Newer Core name selectors use escaped,
+case-insensitive terms with local exact-match and ambiguity checks; older Core
+retains the legacy bounded name search. The shared transport body cap still
+applies to every response, including a single unusually large resource.
 
 Core uses `mogh_error` 1.0.4 for HTTP failures. Its
 [`Serror` source](https://docs.rs/mogh_error/1.0.4/src/mogh_error/serror.rs.html)
