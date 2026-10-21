@@ -44,7 +44,9 @@ The client sends the documented envelope form to `/read`, `/write`, and
 Reads and typed writes (`UpdateStack`, `WriteStackFileContents`) go to `/read`
 and `/write`; action executions go to `/execute`. Response structures represent
 named typed contracts. Resource search and status include the supported Core
-list record alongside the normalized summary. Unknown new upstream fields need
+list record alongside the normalized summary by default. Caller-selected summary
+responses retain normalized facts while detail keeps the complete supported record.
+Unknown new upstream fields need
 an explicit compatibility update; presumed sensitivity does not justify excluding
 supported facts. Write responses that echo submitted configuration remain
 acknowledgments; callers use the corresponding typed read to observe state.
