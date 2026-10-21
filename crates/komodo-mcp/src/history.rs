@@ -8,7 +8,7 @@ use toml_edit::{DocumentMut, Item, TableLike};
 use url::Url;
 use zeroize::Zeroizing;
 
-use super::{KomodoMcp, McpError, OperationStatus, files::FileValue, normalize_operation};
+use super::{KomodoMcp, OperationStatus, files::FileValue, normalize_operation};
 
 /// Ordinary history text with the original credential-bearing document available natively.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -23,21 +23,50 @@ pub(super) struct HistoryDocument {
     original_file: Option<FileValue>,
     /// Why a credential-bearing original cannot currently be transferred.
     original_file_unavailable: Option<&'static str>,
+    /// Why no safe inline projection is available. The original remains file-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format_error: Option<HistoryFormatError>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct HistoryFormatError {
+    message: &'static str,
+    byte_range: Option<HistoryByteRange>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+struct HistoryByteRange {
+    start: usize,
+    end: usize,
 }
 
 struct PreparedDocument {
     toml: String,
     credential_fields: Vec<String>,
     original: Option<Zeroizing<Vec<u8>>>,
+    format_error: Option<HistoryFormatError>,
 }
 
 impl PreparedDocument {
-    fn parse(original: String) -> Result<Self, McpError> {
-        let mut document = original.parse::<DocumentMut>().map_err(|error| {
-            McpError::internal_error("Core history document is not valid TOML", Some(serde_json::json!({
-                "byteRange":error.span().map(|span| serde_json::json!({"start":span.start,"end":span.end}))
-            })))
-        })?;
+    fn parse(original: String) -> Self {
+        let mut document = match original.parse::<DocumentMut>() {
+            Ok(document) => document,
+            Err(error) => {
+                return Self {
+                    toml: String::new(),
+                    credential_fields: Vec::new(),
+                    original: Some(Zeroizing::new(original.into_bytes())),
+                    format_error: Some(HistoryFormatError {
+                        message: "Core history document is not valid TOML",
+                        byte_range: error.span().map(|span| HistoryByteRange {
+                            start: span.start,
+                            end: span.end,
+                        }),
+                    }),
+                };
+            }
+        };
         let mut fields = Vec::new();
         for (kind, collection) in document.iter_mut() {
             let kind = kind.get();
@@ -58,11 +87,12 @@ impl PreparedDocument {
                 Some(Zeroizing::new(original.into_bytes())),
             )
         };
-        Ok(Self {
+        Self {
             toml,
             credential_fields: fields,
             original,
-        })
+            format_error: None,
+        }
     }
 
     fn publish(self, handler: &KomodoMcp, name: &'static str) -> HistoryDocument {
@@ -71,6 +101,7 @@ impl PreparedDocument {
             credential_fields: self.credential_fields,
             original_file: None,
             original_file_unavailable: None,
+            format_error: self.format_error,
         };
         if let Some(bytes) = self.original {
             if let Some((owner, files)) = &handler.credential_files {
@@ -95,22 +126,14 @@ pub(super) struct PreparedOperation {
 }
 
 impl PreparedOperation {
-    pub(super) fn parse(mut item: OperationItem) -> Result<Self, McpError> {
-        let previous = item
-            .prev_toml
-            .take()
-            .map(PreparedDocument::parse)
-            .transpose()?;
-        let current = item
-            .current_toml
-            .take()
-            .map(PreparedDocument::parse)
-            .transpose()?;
-        Ok(Self {
+    pub(super) fn parse(mut item: OperationItem) -> Self {
+        let previous = item.prev_toml.take().map(PreparedDocument::parse);
+        let current = item.current_toml.take().map(PreparedDocument::parse);
+        Self {
             item,
             previous,
             current,
-        })
+        }
     }
 
     pub(super) fn publish(self, handler: &KomodoMcp) -> OperationStatus {
@@ -126,11 +149,8 @@ impl PreparedOperation {
 }
 
 impl KomodoMcp {
-    pub(super) fn normalize_history_operation(
-        &self,
-        item: OperationItem,
-    ) -> Result<OperationStatus, McpError> {
-        Ok(PreparedOperation::parse(item)?.publish(self))
+    pub(super) fn normalize_history_operation(&self, item: OperationItem) -> OperationStatus {
+        PreparedOperation::parse(item).publish(self)
     }
 }
 
@@ -369,11 +389,11 @@ mod tests {
     #[test]
     fn ordinary_documents_and_empty_inheritance_remain_exact() {
         let source = "# ordinary comment\n[[stack]]\nname = 'api'\n[stack.config]\nwebhook_secret = ''\nenvironment = 'PASSWORD=ordinary-document-text'\nfile_contents = 'token: ordinary Compose text'\n\n[[builder]]\nname = 'builder'\n[builder.config]\ntype = 'Server'\n[builder.config.params]\nsecrets = ['secret-name-reference']\n";
-        let result = PreparedDocument::parse(source.into()).unwrap();
+        let result = PreparedDocument::parse(source.into());
         assert_eq!(result.toml, source);
         assert!(result.credential_fields.is_empty());
         assert!(result.original.is_none());
-        let empty = PreparedDocument::parse(String::new()).unwrap();
+        let empty = PreparedDocument::parse(String::new());
         assert_eq!(empty.toml, "");
         assert!(empty.original.is_none());
     }
@@ -404,7 +424,7 @@ mod tests {
             let source = format!(
                 "[[{kind}]]\nname = 'instance'\n[{kind}.config]\n{key} = 'synthetic-literal-value'\nordinary = 'preserved'\n"
             );
-            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let result = PreparedDocument::parse(source.clone());
             assert!(!result.toml.contains("synthetic-literal-value"), "{kind}");
             assert!(result.toml.contains("ordinary = 'preserved'"));
             assert_eq!(
@@ -417,14 +437,14 @@ mod tests {
             let source = format!(
                 "[[{kind}]]\nname = 'builder'\n[{kind}.config]\ntype = 'Url'\n[{kind}.config.params]\npasskey = 'synthetic-literal-value'\naddress = 'https://periphery.example.test:8120'\nperiphery_public_key = 'public-key'\n"
             );
-            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let result = PreparedDocument::parse(source.clone());
             assert!(!result.toml.contains("synthetic-literal-value"));
             assert!(result.toml.contains("https://periphery.example.test:8120"));
             assert!(result.toml.contains("public-key"));
             assert_eq!(*result.original.unwrap(), source.into_bytes());
         }
         let source = "servers = [{name='one', config={passkey='synthetic-literal-value', address='https://periphery.example.test'}}]";
-        let result = PreparedDocument::parse(source.into()).unwrap();
+        let result = PreparedDocument::parse(source.into());
         assert!(!result.toml.contains("synthetic-literal-value"));
         assert!(result.toml.contains("https://periphery.example.test"));
         assert_eq!(*result.original.unwrap(), source.as_bytes());
@@ -455,7 +475,7 @@ mod tests {
             ),
         ] {
             let source = alerter_document(kind, url);
-            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let result = PreparedDocument::parse(source.clone());
             assert!(!result.toml.contains("synthetic-url-token"));
             assert!(!result.toml.contains("synthetic-user-key"));
             assert!(result.toml.contains(ordinary));
@@ -476,7 +496,7 @@ mod tests {
                 kind,
                 "https://alerts.example.test/secret-name?token=ordinary-reference",
             );
-            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let result = PreparedDocument::parse(source.clone());
             assert_eq!(result.toml, source);
             assert!(result.original.is_none());
         }
@@ -497,7 +517,7 @@ mod tests {
             ),
         ] {
             let source = alerter_document(kind, url);
-            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let result = PreparedDocument::parse(source.clone());
             assert!(result.toml.contains(ordinary));
             assert!(!result.toml.contains("%25"));
             assert!(!result.toml.contains("synthetic-url-token"));
@@ -541,7 +561,7 @@ mod tests {
                 .replace("synthetic-password", "credential-in-original-file")
                 .replace("synthetic-token", "credential-in-original-file")
                 .replace("synthetic-user", "credential-in-original-file");
-            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let result = PreparedDocument::parse(source.clone());
             let document = result.toml.parse::<DocumentMut>().unwrap();
             assert_eq!(
                 document["alerter"][0]["config"]["endpoint"]["params"]["url"].as_str(),
@@ -555,7 +575,7 @@ mod tests {
             "https://operator:@[invalid-ipv6]/route",
         ] {
             let source = alerter_document("Custom", url);
-            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let result = PreparedDocument::parse(source.clone());
             assert_eq!(result.toml, source);
             assert!(result.original.is_none());
         }
@@ -586,7 +606,7 @@ mod tests {
             ),
         ] {
             let source = alerter_document(kind, url);
-            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let result = PreparedDocument::parse(source.clone());
             assert!(!result.toml.contains("synthetic-token"));
             assert!(!result.toml.contains("synthetic-password"));
             assert!(result.toml.contains(ordinary));
@@ -606,7 +626,7 @@ mod tests {
                 Some("synthetic-password")
             );
             let source = alerter_document("Custom", url);
-            let result = PreparedDocument::parse(source.clone()).unwrap();
+            let result = PreparedDocument::parse(source.clone());
             assert!(!result.toml.contains("synthetic-password"));
             assert!(
                 result
@@ -619,7 +639,7 @@ mod tests {
             "Custom",
             "  https:/alerts.example.test/public%2Froute?token=ordinary-reference  ",
         );
-        let result = PreparedDocument::parse(source.clone()).unwrap();
+        let result = PreparedDocument::parse(source.clone());
         assert_eq!(result.toml, source);
         assert!(result.original.is_none());
     }
@@ -632,7 +652,7 @@ mod tests {
                     " \t{prefix}operator:synthetic-password@hooks.slack.com{port}\\services\\TPUBLIC\\BPUBLIC\\synthetic-token?wait=true \r"
                 );
                 let source = alerter_document("Slack", &url);
-                let result = PreparedDocument::parse(source.clone()).unwrap();
+                let result = PreparedDocument::parse(source.clone());
                 assert!(
                     !result.toml.contains("synthetic-password"),
                     "{prefix}{port}"
@@ -647,12 +667,13 @@ mod tests {
 
     #[test]
     fn malformed_toml_is_an_explicit_format_failure_without_source_values() {
-        let error = PreparedDocument::parse(
-            "[[stack]]\n[stack.config]\nwebhook_secret = 'synthetic-private-sentinel".into(),
-        )
-        .err()
-        .unwrap();
+        let source = "[[stack]]\n[stack.config]\nwebhook_secret = 'synthetic-private-sentinel";
+        let document = PreparedDocument::parse(source.into());
+        assert!(document.toml.is_empty());
+        assert_eq!(*document.original.unwrap(), source.as_bytes());
+        let error = document.format_error.unwrap();
         assert_eq!(error.message, "Core history document is not valid TOML");
+        assert!(error.byte_range.is_some());
         assert!(!format!("{error:?}").contains("synthetic-private-sentinel"));
     }
 }
