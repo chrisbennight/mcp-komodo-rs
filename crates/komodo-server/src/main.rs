@@ -108,9 +108,7 @@ async fn run() -> Result<()> {
     .with_tool_profile(args.tool_profile);
     let cancellation = CancellationToken::new();
     let router = build_router(&settings, handler, &cancellation)?;
-    let address: SocketAddr = format!("{}:{}", settings.host, settings.port)
-        .parse()
-        .context("invalid listen address")?;
+    let address = listener_address(&settings.host, settings.port)?;
     let listener = TcpListener::bind(address).await.context("bind listener")?;
     info!(target: diagnostics::TARGET, "Komodo MCP listening");
     let server = axum::serve(listener, router)
@@ -192,13 +190,7 @@ async fn shutdown_signal() -> std::io::Result<()> {
 
 async fn healthcheck() -> Result<()> {
     let settings = Settings::listener_from_env().context("invalid listener configuration")?;
-    let host = settings
-        .host
-        .parse::<IpAddr>()
-        .ok()
-        .filter(IpAddr::is_loopback)
-        .map_or("127.0.0.1".to_owned(), |address| address.to_string());
-    let url = format!("http://{host}:{}/healthz", settings.port);
+    let url = healthcheck_url(listener_address(&settings.host, settings.port)?);
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .redirect(reqwest::redirect::Policy::none())
@@ -214,4 +206,43 @@ async fn healthcheck() -> Result<()> {
         "health endpoint is not ready"
     );
     Ok(())
+}
+
+fn listener_address(host: &str, port: u16) -> Result<SocketAddr> {
+    let ip = host.parse::<IpAddr>().context("invalid listen address")?;
+    Ok(SocketAddr::new(ip, port))
+}
+
+fn healthcheck_url(address: SocketAddr) -> url::Url {
+    let ip = match address.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        IpAddr::V6(ip) if ip.is_unspecified() => IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+        ip => ip,
+    };
+    let mut url = url::Url::parse("http://localhost/healthz").expect("fixed health URL");
+    url.set_ip_host(ip).expect("HTTP accepts an IP host");
+    url.set_port(Some(address.port()))
+        .expect("HTTP accepts a port");
+    url
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{healthcheck_url, listener_address};
+
+    #[test]
+    fn listener_and_healthcheck_preserve_ipv4_and_ipv6_addresses() {
+        for (host, expected) in [
+            ("127.0.0.1", "http://127.0.0.1:8123/healthz"),
+            ("0.0.0.0", "http://127.0.0.1:8123/healthz"),
+            ("::1", "http://[::1]:8123/healthz"),
+            ("::", "http://[::1]:8123/healthz"),
+            ("fd00::1", "http://[fd00::1]:8123/healthz"),
+        ] {
+            let address = listener_address(host, 8123).unwrap();
+            assert_eq!(address.ip().to_string(), host);
+            assert_eq!(healthcheck_url(address).as_str(), expected);
+        }
+        assert!(listener_address("localhost", 8123).is_err());
+    }
 }

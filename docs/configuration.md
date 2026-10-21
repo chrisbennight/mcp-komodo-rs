@@ -74,7 +74,10 @@ settings are not used for Komodo or JWKS requests.
 | `KOMODO_MCP_IDENTITY_ACTOR` | Required | Exact `act.sub`, 1–256 bytes, no control characters or leading/trailing whitespace; never normalized |
 
 JWKS fetches have a fixed three-second timeout, five-minute cache lifetime, and
-64 KiB response limit. Identity-token timing and claim requirements are in
+64 KiB response limit. Miss-triggered refreshes, including failed fetches, are
+limited to one attempt per thirty seconds. A fetched set remains cached even
+when the requested key is absent; published signing-key rotation is discovered
+on the next permitted refresh. Identity-token timing and claim requirements are in
 [the architecture](architecture.md#request-path). A previous bearer remains
 valid until removed from configuration and the process restarted. Generate
 bearers with a trusted secret manager or platform cryptographic random generator.
@@ -93,7 +96,9 @@ The example placeholders are not credentials to deploy.
 | `KOMODO_MCP_MAX_BODY_BYTES` | `1048576` | Integer, 1024–4194304 bytes |
 | `KOMODO_MCP_LOG_LEVEL` | `info` | Tracing EnvFilter expression restricted to the `komodo_server::diagnostics` target; cannot enable dependency logs or protocol payloads |
 
-Host and Origin lists are trimmed, lowercased, and empty entries removed. Host
+An unapproved supplied Origin receives HTTP 403. Missing or invalid gateway
+credentials receive HTTP 401. Host and Origin lists are trimmed, lowercased, and
+empty entries removed. Host
 matching is case-insensitive; incoming Origin is compared exactly to the
 normalized list. List values are not wildcards. Optional numeric values use
 their defaults when absent or blank. Most ordinary string settings are trimmed;
@@ -123,6 +128,10 @@ local requests, and allows up to five seconds for HTTP connections to drain.
 `/readyz` returns HTTP 503 during shutdown; `/healthz` remains an independent
 liveness endpoint. Readiness indicates whether this process accepts work, not
 whether Komodo is healthy.
+
+Listener addresses accept IPv4 and IPv6 IP literals without brackets. Health
+checks use the configured listener address, substituting the same address
+family's loopback address for an unspecified bind address.
 
 ## Command-line modes
 

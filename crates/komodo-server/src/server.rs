@@ -358,6 +358,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejected_origin_is_forbidden_while_missing_credentials_are_unauthorized() {
+        let cancellation = CancellationToken::new();
+        let router = build_router(
+            &settings(),
+            KomodoMcp::read_only(Arc::new(UnavailableApi)),
+            &cancellation,
+        )
+        .unwrap();
+        for (origin, expected) in [
+            (Some("https://unapproved.test"), StatusCode::FORBIDDEN),
+            (None, StatusCode::UNAUTHORIZED),
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header(header::HOST, "localhost");
+            if let Some(origin) = origin {
+                request = request.header(header::ORIGIN, origin);
+            }
+            let response = router
+                .clone()
+                .oneshot(request.body(Body::from("{}")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        cancellation.cancel();
+    }
+
+    #[tokio::test]
     async fn body_limit_rejects_oversized_requests_before_the_handler() {
         let router = Router::new()
             .route("/", post(|| async { StatusCode::NO_CONTENT }))

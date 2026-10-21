@@ -27,6 +27,7 @@ const MAXIMUM_IDENTITY_ACTOR_BYTES: usize = 256;
 const CLOCK_SKEW_SECONDS: i64 = 30;
 const MAXIMUM_IDENTITY_TOKEN_AGE_SECONDS: i64 = 240;
 const MAXIMUM_IDENTITY_TOKEN_LIFETIME_SECONDS: i64 = 300;
+const MINIMUM_JWKS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Current and optional previous gateway service credentials.
 pub struct GatewayBearers {
@@ -124,7 +125,7 @@ pub struct IdentityVerifier {
     settings: Arc<IdentityVerifierSettings>,
     client: reqwest::Client,
     cache: Arc<RwLock<Option<CachedKeys>>>,
-    refresh: Arc<Mutex<()>>,
+    refresh: Arc<Mutex<Option<Instant>>>,
 }
 
 #[derive(Debug)]
@@ -195,7 +196,7 @@ impl IdentityVerifier {
             settings: Arc::new(settings),
             client,
             cache: Arc::new(RwLock::new(None)),
-            refresh: Arc::new(Mutex::new(())),
+            refresh: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -267,20 +268,24 @@ impl IdentityVerifier {
         if let Some(key) = self.cached_key(key_id).await {
             return Ok(key);
         }
-        let _guard = self.refresh.lock().await;
+        let mut refresh_after = self.refresh.lock().await;
         if let Some(key) = self.cached_key(key_id).await {
             return Ok(key);
         }
+        let now = Instant::now();
+        if refresh_after.is_some_and(|after| now < after) {
+            return Err(IdentityError::KeyUnavailable);
+        }
+        // Bound all miss-triggered fetches, including unknown ids and failures,
+        // without retaining attacker-selected key identifiers.
+        *refresh_after = Some(now + MINIMUM_JWKS_REFRESH_INTERVAL.min(self.settings.cache_ttl));
         let keys = self.fetch_keys().await?;
-        let key = keys
-            .find(key_id)
-            .cloned()
-            .ok_or(IdentityError::KeyUnavailable)?;
+        let key = keys.find(key_id).cloned();
         *self.cache.write().await = Some(CachedKeys {
             keys,
             expires_at: Instant::now() + self.settings.cache_ttl,
         });
-        Ok(key)
+        key.ok_or(IdentityError::KeyUnavailable)
     }
 
     async fn cached_key(&self, key_id: &str) -> Option<jsonwebtoken::jwk::Jwk> {
@@ -376,6 +381,12 @@ struct AuthFailure {
     error: &'static str,
 }
 
+#[derive(Debug)]
+enum IngressFailure {
+    Unauthorized,
+    InvalidOrigin,
+}
+
 pub async fn require_gateway(
     State(auth): State<IngressAuth>,
     mut request: Request,
@@ -386,7 +397,14 @@ pub async fn require_gateway(
             request.extensions_mut().insert(principal);
             next.run(request).await
         }
-        Err(()) => (
+        Err(IngressFailure::InvalidOrigin) => (
+            StatusCode::FORBIDDEN,
+            Json(AuthFailure {
+                error: "gateway origin is not allowed",
+            }),
+        )
+            .into_response(),
+        Err(IngressFailure::Unauthorized) => (
             StatusCode::UNAUTHORIZED,
             Json(AuthFailure {
                 error: "gateway authentication required",
@@ -399,34 +417,37 @@ pub async fn require_gateway(
 async fn authenticate(
     auth: &IngressAuth,
     headers: &axum::http::HeaderMap,
-) -> Result<IdentityPrincipal, ()> {
+) -> Result<IdentityPrincipal, IngressFailure> {
     let host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .map(str::to_ascii_lowercase)
-        .ok_or(())?;
+        .ok_or(IngressFailure::Unauthorized)?;
     if !auth.allowed_hosts.iter().any(|allowed| allowed == &host) {
-        return Err(());
+        return Err(IngressFailure::Unauthorized);
     }
     if let Some(origin) = headers.get(header::ORIGIN) {
-        let origin = origin.to_str().map_err(|_| ())?;
+        let origin = origin.to_str().map_err(|_| IngressFailure::InvalidOrigin)?;
         if !auth.allowed_origins.iter().any(|allowed| allowed == origin) {
-            return Err(());
+            return Err(IngressFailure::InvalidOrigin);
         }
     }
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or(())?;
+        .ok_or(IngressFailure::Unauthorized)?;
     if !auth.bearers.accepts(bearer.as_bytes()) {
-        return Err(());
+        return Err(IngressFailure::Unauthorized);
     }
     let identity = headers
         .get(IDENTITY_HEADER)
         .and_then(|value| value.to_str().ok())
-        .ok_or(())?;
-    auth.verifier.verify(identity).await.map_err(|_| ())
+        .ok_or(IngressFailure::Unauthorized)?;
+    auth.verifier
+        .verify(identity)
+        .await
+        .map_err(|_| IngressFailure::Unauthorized)
 }
 
 #[cfg(test)]
@@ -490,8 +511,16 @@ mod tests {
     }
 
     fn token(signing: &SigningKey, claims: &TestIdentityClaims) -> String {
+        token_with_key_id(signing, claims, "test-key")
+    }
+
+    fn token_with_key_id(
+        signing: &SigningKey,
+        claims: &TestIdentityClaims,
+        key_id: &str,
+    ) -> String {
         let mut header = Header::new(Algorithm::EdDSA);
-        header.kid = Some("test-key".into());
+        header.kid = Some(key_id.into());
         let document = signing.to_pkcs8_der().expect("PKCS#8 test key");
         encode(
             &header,
@@ -741,6 +770,57 @@ mod tests {
                 Err(IdentityError::Invalid)
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn unknown_keys_share_refresh_and_published_rotation_remains_available() {
+        let (verifier, signing, server) = verifier().await;
+        assert!(verifier.key("unknown-first").await.is_err());
+        let (first, second, third) = tokio::join!(
+            verifier.key("missing-a"),
+            verifier.key("missing-b"),
+            verifier.key("missing-c"),
+        );
+        assert!(first.is_err() && second.is_err() && third.is_err());
+        assert!(
+            verifier
+                .verify(&token(&signing, &valid_claims()))
+                .await
+                .is_ok()
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+
+        server.reset().await;
+        let rotated = SigningKey::from_bytes(&[9_u8; 32]);
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "keys": [{"kty":"OKP", "crv":"Ed25519", "kid":"rotated", "alg":"EdDSA",
+                    "x":URL_SAFE_NO_PAD.encode(rotated.verifying_key().as_bytes())}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let identity = token_with_key_id(&rotated, &valid_claims(), "rotated");
+        assert!(verifier.verify(&identity).await.is_err());
+        *verifier.refresh.lock().await = Some(std::time::Instant::now());
+        assert!(verifier.verify(&identity).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn failed_refreshes_also_suppress_repeated_fetches() {
+        let (verifier, _, server) = verifier().await;
+        server.reset().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            verifier.key("missing").await,
+            Err(IdentityError::Unavailable)
+        ));
+        assert!(verifier.key("another-missing").await.is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
