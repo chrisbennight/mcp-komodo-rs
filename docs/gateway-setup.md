@@ -98,7 +98,7 @@ use. Test mutations only against disposable resources. Follow
 [write reconciliation](reconciliation.md) when no usable receipt is returned;
 never automatically repeat a timed-out write.
 
-An HTTP 401 from `/mcp` can indicate a Host/Origin mismatch, bearer mismatch,
+An HTTP 403 from `/mcp` indicates a rejected Origin. An HTTP 401 can indicate a Host mismatch, bearer mismatch,
 unverifiable identity token, stale timestamps, or JWKS failure. Inspect the
 configuration names and clock synchronization without logging tokens. A Komodo
 authentication/permission error after a valid MCP call concerns the upstream
