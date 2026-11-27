@@ -30,7 +30,7 @@ jobs:
           GITHUB_REF: ${{ github.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: bash scripts/ci-scope.sh
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+      - uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2
         if: steps.scope.outputs.deps == 'true'
         with:
           rust-version: "1.96.0"
